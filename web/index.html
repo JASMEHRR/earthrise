@@ -19,6 +19,19 @@
   </div>
   <div class="lyrics" id="lyrics" aria-live="polite"></div>
 
+  <div class="info" id="info" hidden>
+    <div class="eyebrow">Now playing</div>
+    <div class="ititle" id="iTitle"></div>
+    <div class="iartist" id="iArtist"></div>
+    <div class="ialbum" id="iAlbum"></div>
+    <div class="itime"><span id="iElapsed">0:00</span><span class="ibar"><i id="iBar"></i></span><span id="iTotal"></span></div>
+    <div class="inext" id="iNext" hidden>
+      <div class="eyebrow">Up next</div>
+      <b id="iNextTitle"></b>
+      <small id="iNextArtist"></small>
+    </div>
+  </div>
+
   <canvas id="mini" aria-hidden="true"></canvas>
   <button type="button" class="wheel-btn" id="wheelBtn" aria-label="Song wheel. Press, scroll or swipe to pick a song."></button>
   <div class="wheel-label" id="wheelLabel" aria-hidden="true"></div>
@@ -95,6 +108,7 @@
         <div class="chips">
           <button type="button" class="tog" data-key="lyrics">Lyrics</button>
           <button type="button" class="tog" data-key="clock">Clock</button>
+          <button type="button" class="tog" data-key="info">Song info</button>
           <button type="button" class="tog" data-key="ring">Progress ring</button>
           <button type="button" class="tog" data-key="colour">Album colours</button>
           <button type="button" class="tog" data-key="motion">Motion</button>

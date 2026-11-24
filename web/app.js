@@ -134,14 +134,14 @@ var SCOPES = 'user-read-currently-playing user-read-playback-state user-modify-p
 var LIBRARY_SCOPES = ['user-read-recently-played', 'playlist-read-private', 'user-library-read'];
 var API = 'https://api.spotify.com/v1';
 var BPM = 118;
-var SCENES_LIST = ['stars', 'aurora', 'bokeh', 'rain', 'embers', 'lasers', 'grid'];
+var SCENES_LIST = ['cover', 'stars', 'aurora', 'bokeh', 'rain', 'embers', 'lasers', 'grid'];
 
 var store = {
   get: function (k, d) { try { var v = localStorage.getItem('er.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
   set: function (k, v) { try { localStorage.setItem('er.' + k, JSON.stringify(v)); } catch (e) { /* storage blocked: lasts this visit only */ } },
   del: function (k) { try { localStorage.removeItem('er.' + k); } catch (e) { /* same as above */ } }
 };
-var settings = Object.assign({ motion: true, clock: true, lyrics: true, liveAudio: true, ring: true, colour: true,
+var settings = Object.assign({ motion: true, clock: true, lyrics: true, liveAudio: true, ring: true, colour: true, info: true,
   drift: true, lyricOffset: 0, textStyle: 'auto', scene: 'auto' }, store.get('settings', {}));
 function saveSettings() { store.set('settings', settings); }
 
@@ -154,6 +154,7 @@ var BARS = 120, HALF = BARS / 2;
 var sm = new Float32Array(HALF), target = new Float32Array(HALF), bassSm = 0;
 var angle = 0, miniAngle = 0, last = 0, clockT = 0;
 var disc = null, discPrev = null, discFade = 1, artImg = null, blankDisc = null;
+var coverBg = null, coverPrev = null, coverFade = 1;
 var accent = [255, 255, 255], accentTarget = [255, 255, 255];
 var lyricKey = '';
 
@@ -176,8 +177,17 @@ function startDemo() {
   queue = ['Low Gravity', 'Signal Fire', 'Night Bus', 'Paper Moons', 'Static Hearts', 'Blue Hour'].map(function (t, i) {
     return { id: 'q' + i, title: t, artist: 'Demo mode', thumb: '', uri: '' };
   });
+  np.item.album = 'Demo album';
   accentTarget = [120, 190, 255];
   sceneAuto = 'aurora';
+  // a made-up cover so the record and the "Album cover" background have something to show
+  var art = document.createElement('canvas'); art.width = art.height = 300;
+  var ag = art.getContext('2d'), lg = ag.createLinearGradient(0, 0, 300, 300);
+  lg.addColorStop(0, '#0b2a4a'); lg.addColorStop(.55, '#2f6fb0'); lg.addColorStop(1, '#f0a35c');
+  ag.fillStyle = lg; ag.fillRect(0, 0, 300, 300);
+  ag.fillStyle = 'rgba(255,255,255,.85)'; ag.beginPath(); ag.arc(210, 95, 42, 0, TAU); ag.fill();
+  ag.fillStyle = '#071827'; ag.beginPath(); ag.moveTo(0, 300); ag.lineTo(0, 210); ag.lineTo(90, 150); ag.lineTo(170, 220); ag.lineTo(240, 170); ag.lineTo(300, 230); ag.lineTo(300, 300); ag.fill();
+  setTimeout(function () { setDisc(art); }, 0);
   setInterval(function () { if (np.playing && progressMs() > 33000) { np.progress = 0; np.at = performance.now(); } }, 500);
 }
 
@@ -349,7 +359,7 @@ function loadQueue() {
       if (queue.length >= 20 || !it || seen[it.id]) return;
       seen[it.id] = true; queue.push(toItem(it));
     });
-    buildRows();
+    buildRows(); renderInfo();
     if (drawerOpen() && drawerTab === 'music') renderMusic();
     if (queue[0]) {
       prefetchLyrics(queue[0]);
@@ -522,7 +532,8 @@ function makeDisc(img, px) {
   var g = c.getContext('2d'), R = px / 2;
   g.translate(R, R); g.beginPath(); g.arc(0, 0, R, 0, TAU); g.clip();
   if (img) {
-    var s = Math.max(px / img.naturalWidth, px / img.naturalHeight), w = img.naturalWidth * s, h = img.naturalHeight * s;
+    var iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+    var s = Math.max(px / iw, px / ih), w = iw * s, h = ih * s;
     g.drawImage(img, -w / 2, -h / 2, w, h);
   } else {
     var gr = g.createRadialGradient(-R * .3, -R * .35, R * .05, 0, 0, R);
@@ -542,8 +553,22 @@ function makeDisc(img, px) {
   return c;
 }
 function discPx() { return clamp(Math.ceil(geo.r * 2 * DPR), 64, 1024); }
+/* Soft, blurred copy of the cover for the "Album cover" background. Made once per song at low size. */
+function makeCoverBg(img) {
+  var c = document.createElement('canvas'); c.width = c.height = 256;
+  var g = c.getContext('2d');
+  if ('filter' in g) { g.filter = 'blur(7px)'; g.drawImage(img, -24, -24, 304, 304); }
+  else {
+    var s = document.createElement('canvas'); s.width = s.height = 32;
+    s.getContext('2d').drawImage(img, 0, 0, 32, 32);
+    g.imageSmoothingEnabled = true; g.drawImage(s, 0, 0, 256, 256);
+  }
+  return c;
+}
 function setDisc(img) {
   artImg = img;
+  coverPrev = coverBg; coverFade = settings.motion && coverPrev ? 0 : 1;
+  coverBg = img ? makeCoverBg(img) : null;
   if (!W) return;
   discPrev = disc; discFade = settings.motion && discPrev ? 0 : 1;
   disc = img ? makeDisc(img, discPx()) : blankDisc;
@@ -588,7 +613,32 @@ function sceneName() {
   if (sceneAuto) return sceneAuto;
   var c = accent; return c[0] > c[2] + 20 ? 'aurora' : 'stars';
 }
+function drawCoverImage(c, alpha, t, bass) {
+  var s = Math.max(W / c.width, H / c.height) * (1.08 + .04 * Math.sin(t * .05) + bass * .02);
+  var w = c.width * s, h = c.height * s;
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(c, (W - w) / 2 + Math.sin(t * .03) * W * .02, (H - h) / 2 + Math.cos(t * .025) * H * .02, w, h);
+  ctx.globalAlpha = 1;
+}
 var SCENES = {
+  cover: {
+    init: function () { return []; },
+    draw: function (p, dt, t, bass) {
+      if (coverFade < 1) coverFade = Math.min(1, coverFade + dt * 1.2);
+      if (coverPrev && coverFade < 1) drawCoverImage(coverPrev, 1, t, bass);
+      if (coverBg) drawCoverImage(coverBg, coverPrev ? coverFade : 1, t, bass);
+      else {
+        var g0 = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) * .7);
+        g0.addColorStop(0, accentRgba(.35, .2)); g0.addColorStop(1, accentRgba(.05, .2));
+        ctx.fillStyle = g0; ctx.fillRect(0, 0, W, H);
+      }
+      // darken so the record, lyrics and info stay readable
+      ctx.fillStyle = 'rgba(0,0,0,' + (.5 - bass * .06) + ')'; ctx.fillRect(0, 0, W, H);
+      var v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * .3, W / 2, H / 2, Math.max(W, H) * .75);
+      v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,.65)');
+      ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+    }
+  },
   stars: {
     init: function () {
       var n = Math.round(clamp(W * H / 6000, 120, 320)), a = [];
@@ -949,7 +999,7 @@ function draw(t, dt) {
 
   lyrEl.style.transform = settings.motion ? 'scale(' + (1 + pulse * .025) + ')' : '';
   if (t - clockT > 300) {
-    clockT = t; var c = curAccent();
+    clockT = t; tickInfo(); var c = curAccent();
     stage.style.setProperty('--acc', 'rgb(' + Math.round(c[0]) + ',' + Math.round(c[1]) + ',' + Math.round(c[2]) + ')');
   }
 }
@@ -975,6 +1025,7 @@ function resize() {
   scene.name = null;
   layoutWheel();
   lyricKey = '';
+  if ($('info')) renderInfo();
 }
 
 /* ---------- side drawer: music, connect steps, settings ---------- */
@@ -1083,7 +1134,7 @@ function renderSettings() {
   $('lyrOffset').textContent = (off > 0 ? '+' : '') + off.toFixed(1) + ' s';
   chipGroup($('textChips'), [['auto', 'Mix per song'], ['blur', 'Blur'], ['rise', 'Rise'], ['pop', 'Pop'], ['type', 'Typewriter'], ['karaoke', 'Karaoke'], ['glitch', 'Glitch']],
     settings.textStyle, function (v) { settings.textStyle = v; saveSettings(); lyricKey = ''; renderSettings(); focusChip('textChips', v); });
-  chipGroup($('sceneChips'), [['auto', 'Match the music'], ['off', 'None'], ['stars', 'Stars'], ['aurora', 'Aurora'], ['bokeh', 'Bokeh'], ['rain', 'Rain'], ['embers', 'Embers'], ['lasers', 'Lasers'], ['grid', 'Neon grid']],
+  chipGroup($('sceneChips'), [['auto', 'Match the music'], ['cover', 'Album cover'], ['off', 'None'], ['stars', 'Stars'], ['aurora', 'Aurora'], ['bokeh', 'Bokeh'], ['rain', 'Rain'], ['embers', 'Embers'], ['lasers', 'Lasers'], ['grid', 'Neon grid']],
     settings.scene, function (v) { settings.scene = v; saveSettings(); renderSettings(); focusChip('sceneChips', v); });
   var note = '';
   if (native) {
@@ -1125,9 +1176,36 @@ function ui() {
   $('btnPlay').setAttribute('aria-label', np.playing ? 'Pause' : 'Play');
   $('device').textContent = np.item && np.device ? 'Playing on ' + np.device : '';
   $('wheelLabel').textContent = np.item ? np.item.title : '';
+  renderInfo();
   markRows();
   if (!connected()) showControls();
   if (drawerOpen() && drawerTab === 'settings') renderSettings();
+}
+
+/* Right-hand now-playing panel: title, artist, album, time, up next. Hidden on narrow portrait screens. */
+function fmtTime(ms) {
+  var s = Math.max(0, Math.floor(ms / 1000));
+  return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2);
+}
+function renderInfo() {
+  var show = settings.info && np.item && !portrait;
+  $('info').hidden = !show;
+  if (!show) return;
+  var it = np.item;
+  $('iTitle').textContent = it.title;
+  $('iArtist').textContent = it.artist;
+  $('iAlbum').textContent = it.album || '';
+  var nx = queue[0];
+  $('iNext').hidden = !nx;
+  if (nx) { $('iNextTitle').textContent = nx.title; $('iNextArtist').textContent = nx.artist; }
+  tickInfo();
+}
+function tickInfo() {
+  if ($('info').hidden || !np.item) return;
+  var p = Math.min(progressMs(), np.item.duration || Infinity), d = np.item.duration || 0;
+  $('iElapsed').textContent = fmtTime(p);
+  $('iTotal').textContent = d ? fmtTime(d) : '';
+  $('iBar').style.width = d ? (clamp(p / d, 0, 1) * 100).toFixed(2) + '%' : '0';
 }
 
 function visible(el) {
