@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 320x180 TV launcher banner: black card, record on the left, bars on the right. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <path android:fillColor="#000000" android:pathData="M0,0h320v180h-320z" />
+    <path android:fillColor="#3B4047" android:pathData="M90,90m-52,0a52,52 0,1 1,104 0a52,52 0,1 1,-104 0" />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="4" android:pathData="M90,90m-52,0a52,52 0,1 1,104 0a52,52 0,1 1,-104 0" />
+    <path android:strokeColor="#9AA3AD" android:strokeWidth="2" android:pathData="M90,90m-18,0a18,18 0,1 1,36 0a18,18 0,1 1,-36 0" />
+    <path android:fillColor="#FFFFFF" android:pathData="M90,90m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="8"
+        android:pathData="M172,120v-30 M188,120v-56 M204,120v-40 M220,120v-72 M236,120v-48 M252,120v-26 M268,120v-60 M284,120v-34" />
+</vector>

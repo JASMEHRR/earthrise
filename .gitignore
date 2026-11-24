@@ -1,0 +1,20 @@
+# build output
+.gradle/
+build/
+app/build/
+local.properties
+*.apk
+*.aab
+
+# secrets: signing key and local env
+.signing/
+*.p12
+*.jks
+*.keystore
+.env
+
+# editor and OS
+.idea/
+*.iml
+.DS_Store
+Thumbs.db

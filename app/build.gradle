@@ -1,0 +1,61 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Values come from the CI environment (see .github/workflows/build.yml). Local builds work without them.
+def clientId = System.getenv('SPOTIFY_CLIENT_ID') ?: ''
+def keystorePath = System.getenv('KEYSTORE_PATH') ?: ''
+def keystorePassword = System.getenv('KEYSTORE_PASSWORD') ?: ''
+def hasReleaseKey = keystorePath && keystorePassword && file(keystorePath).exists()
+
+android {
+    namespace 'app.earthrise.visualizer'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'app.earthrise.visualizer'
+        minSdk 23
+        targetSdk 34
+        versionCode((System.getenv('VERSION_CODE') ?: '1') as int)
+        versionName "1.0.${System.getenv('VERSION_CODE') ?: '0'}"
+        buildConfigField 'String', 'SPOTIFY_CLIENT_ID', "\"${clientId.replaceAll('[^0-9a-fA-F]', '')}\""
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    signingConfigs {
+        release {
+            if (hasReleaseKey) {
+                storeFile file(keystorePath)
+                storePassword keystorePassword
+                keyAlias 'earthrise'
+                keyPassword keystorePassword
+                storeType 'pkcs12'
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig hasReleaseKey ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    sourceSets {
+        main {
+            assets.srcDirs = ['../web']
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.webkit:webkit:1.11.0'
+}

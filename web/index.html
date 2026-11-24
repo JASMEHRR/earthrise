@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Earthrise</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;600;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="stage" id="stage">
+  <canvas id="scene" aria-label="Spinning record with sound bars"></canvas>
+  <div class="clock" id="clock"></div>
+  <div class="lyrics" id="lyrics" aria-live="polite"></div>
+  <canvas id="mini" aria-hidden="true"></canvas>
+  <div id="rows" role="group" aria-label="Now playing and up next"></div>
+
+  <div class="controls" id="controls">
+    <button type="button" class="ctl" id="btnPrev" aria-label="Previous song">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg>
+    </button>
+    <button type="button" class="ctl main" id="btnPlay" aria-label="Play">
+      <svg viewBox="0 0 24 24" aria-hidden="true" class="i-play"><path d="M7 4v16l13-8z"/></svg>
+      <svg viewBox="0 0 24 24" aria-hidden="true" class="i-pause"><path d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg>
+    </button>
+    <button type="button" class="ctl" id="btnNext" aria-label="Next song">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg>
+    </button>
+    <button type="button" class="ctl wide" id="btnConnect">Connect Spotify</button>
+    <button type="button" class="ctl" id="btnSettings" aria-label="Settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3.3h-4l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1l.4 2.6h4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg>
+    </button>
+  </div>
+
+  <div class="panel" id="panel" role="dialog" aria-label="Settings" hidden>
+    <h2>Settings</h2>
+    <div class="field">
+      <div class="label"><b>Spotify</b><span id="spStatus">Not connected</span></div>
+      <button type="button" class="pbtn" id="spBtn">Connect Spotify</button>
+    </div>
+    <div class="field" id="cidRow">
+      <label class="label" for="cid"><b>Client ID</b><span>From your app at developer.spotify.com</span></label>
+      <div class="inline">
+        <input id="cid" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="32 letters and numbers">
+        <button type="button" class="pbtn" id="cidSave">Save</button>
+      </div>
+    </div>
+    <div class="toggles">
+      <button type="button" class="tog" data-key="lyrics" aria-pressed="true">Lyrics</button>
+      <button type="button" class="tog" data-key="clock" aria-pressed="true">Clock</button>
+      <button type="button" class="tog" data-key="motion" aria-pressed="true">Motion</button>
+      <button type="button" class="tog" data-key="liveAudio" aria-pressed="true" id="togAudio">TV audio for bars</button>
+    </div>
+    <p class="small">Redirect URI for your Spotify app: <code id="redir"></code></p>
+    <p class="small" id="audioNote"></p>
+    <button type="button" class="pbtn" id="closePanel">Close</button>
+  </div>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
