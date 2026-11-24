@@ -1,7 +1,57 @@
 // Run with: node --test tests
 const test = require('node:test');
 const assert = require('node:assert');
-const { parseLrc, lineIndexAt, layoutLine } = require('../web/app.js');
+const { parseLrc, lineIndexAt, layoutLine, vibrantColor, sceneForGenres, textStyleFor, TEXT_STYLES } = require('../web/app.js');
+
+function pixels(rgbList) {
+  const out = [];
+  rgbList.forEach(([r, g, b]) => out.push(r, g, b, 255));
+  return out;
+}
+
+test('vibrantColor finds the colourful part of a cover and brightens it', () => {
+  const data = pixels([...Array(50).fill([20, 20, 20]), ...Array(50).fill([200, 40, 40])]);
+  const c = vibrantColor(data);
+  assert.ok(c, 'returns a colour');
+  assert.ok(c[0] > 200 && c[1] < 120 && c[2] < 120, `red stays red, got ${c}`);
+});
+
+test('vibrantColor returns null for grey covers', () => {
+  assert.strictEqual(vibrantColor(pixels(Array(100).fill([128, 128, 128]))), null);
+  assert.strictEqual(vibrantColor(pixels(Array(100).fill([0, 0, 0]))), null);
+  assert.strictEqual(vibrantColor([]), null);
+});
+
+test('sceneForGenres maps genres to a background', () => {
+  assert.strictEqual(sceneForGenres(['deep house', 'electro']), 'lasers');
+  assert.strictEqual(sceneForGenres(['hip hop', 'trap']), 'grid');
+  assert.strictEqual(sceneForGenres(['filmi', 'modern bollywood']), 'aurora');
+  assert.strictEqual(sceneForGenres(['punjabi pop']), 'bokeh');
+  assert.strictEqual(sceneForGenres(['lo-fi beats']), 'stars');
+  assert.strictEqual(sceneForGenres(['alternative metal']), 'embers');
+  assert.strictEqual(sceneForGenres(['sad rap']), 'rain');
+  assert.strictEqual(sceneForGenres(['polka']), null);
+  assert.strictEqual(sceneForGenres([]), null);
+  assert.strictEqual(sceneForGenres(undefined), null);
+});
+
+test('textStyleFor honours a fixed choice and is stable per song in auto', () => {
+  assert.strictEqual(textStyleFor('abc', 'karaoke'), 'karaoke');
+  const a = textStyleFor('song-1', 'auto');
+  assert.ok(TEXT_STYLES.includes(a));
+  assert.strictEqual(textStyleFor('song-1', 'auto'), a, 'same song keeps its style');
+  assert.strictEqual(textStyleFor('', 'auto'), 'blur');
+  assert.strictEqual(textStyleFor('x', 'nonsense'), textStyleFor('x', 'auto'));
+  const seen = new Set(Array.from({ length: 60 }, (_, i) => textStyleFor('id' + i, 'auto')));
+  assert.ok(seen.size >= 4, 'auto spreads across several styles');
+});
+
+test('layoutLine treats Hindi filler words as small', () => {
+  const flat = layoutLine('tera naam liya dil ne').flat();
+  const small = flat.filter(x => !x.big).map(x => x.w);
+  assert.ok(small.includes('tera') && small.includes('ne'));
+  assert.ok(flat.find(x => x.w === 'naam').big);
+});
 
 test('parseLrc reads timed lines and sorts them', () => {
   const lrc = '[00:12.50]Second line\n[00:01.00]First line\n[ar:Someone]\n[01:02.25]Third';

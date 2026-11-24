@@ -7,16 +7,23 @@
 <title>Earthrise</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@700&family=Noto+Sans+Gurmukhi:wght@700&display=swap">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div class="stage" id="stage">
   <canvas id="scene" aria-label="Spinning record with sound bars"></canvas>
-  <div class="clock" id="clock"></div>
+  <div class="corner">
+    <div class="clock" id="clock"></div>
+    <div class="device" id="device"></div>
+  </div>
   <div class="lyrics" id="lyrics" aria-live="polite"></div>
+
   <canvas id="mini" aria-hidden="true"></canvas>
-  <div id="rows" role="group" aria-label="Now playing and up next"></div>
+  <button type="button" class="wheel-btn" id="wheelBtn" aria-label="Song wheel. Press, scroll or swipe to pick a song."></button>
+  <div class="wheel-label" id="wheelLabel" aria-hidden="true"></div>
+  <div id="rows" role="listbox" aria-label="Now playing and up next"></div>
+  <div class="dim" id="dim" aria-hidden="true"></div>
 
   <div class="controls" id="controls">
     <button type="button" class="ctl" id="btnPrev" aria-label="Previous song">
@@ -30,34 +37,82 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg>
     </button>
     <button type="button" class="ctl wide" id="btnConnect">Connect Spotify</button>
+    <button type="button" class="ctl" id="btnMusic" aria-label="Your music">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h12v2H3zm0 4h12v2H3zm0 4h8v2H3zm14-8h4v2h-2v9.5a2.5 2.5 0 1 1-2-2.45z"/></svg>
+    </button>
     <button type="button" class="ctl" id="btnSettings" aria-label="Settings">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3.3h-4l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1l.4 2.6h4l.4-2.6c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zm8.4 4.6.1-1.1-.1-1.1 2-1.6-2-3.4-2.4 1a8 8 0 0 0-1.9-1.1L15.8 3h-4l-.3 2.7a8 8 0 0 0-1.9 1.1l-2.4-1-2 3.4 2 1.6-.1 1.1.1 1.1-2 1.6 2 3.4 2.4-1c.6.5 1.2.8 1.9 1.1l.3 2.7h4l.3-2.7c.7-.3 1.3-.6 1.9-1.1l2.4 1 2-3.4z" transform="translate(-1.8 0)"/></svg>
     </button>
   </div>
 
-  <div class="panel" id="panel" role="dialog" aria-label="Settings" hidden>
-    <h2>Settings</h2>
-    <div class="field">
-      <div class="label"><b>Spotify</b><span id="spStatus">Not connected</span></div>
-      <button type="button" class="pbtn" id="spBtn">Connect Spotify</button>
+  <aside class="drawer" id="drawer" aria-label="Earthrise menu">
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" class="tab" data-tab="music">Music</button>
+      <button type="button" role="tab" class="tab" data-tab="connect">Connect</button>
+      <button type="button" role="tab" class="tab" data-tab="settings">Settings</button>
+      <button type="button" class="tab close" id="drawerClose" aria-label="Close menu">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4-5.6-5.6L6.4 19 5 17.6 10.6 12 5 6.4z"/></svg>
+      </button>
     </div>
-    <div class="field" id="cidRow">
-      <label class="label" for="cid"><b>Client ID</b><span>From your app at developer.spotify.com</span></label>
-      <div class="inline">
-        <input id="cid" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="32 letters and numbers">
-        <button type="button" class="pbtn" id="cidSave">Save</button>
+
+    <section class="pane" data-pane="music">
+      <div id="musicBody"></div>
+    </section>
+
+    <section class="pane" data-pane="connect" hidden>
+      <p class="lead">Earthrise shows whatever your Spotify account is playing, on any device. Set it up once:</p>
+      <ol class="steps">
+        <li><b>Make a free Spotify app.</b> On your phone or PC open <code>developer.spotify.com/dashboard</code>, log in, and press <b>Create app</b>. Any name and description work.</li>
+        <li><b>Add the redirect address.</b> Under <b>Redirect URIs</b> type exactly <code id="redirMain"></code> and press Add.
+          <span id="redirTv"> If you will also use the TV app, add <code>earthrise://callback</code> too.</span></li>
+        <li><b>Tick Web API</b>, agree to Spotify's terms, and press <b>Save</b>.</li>
+        <li><b>Copy your Client ID</b> from the app's Basic Information page and paste it here.
+          <span class="inline" id="cidInput">
+            <input id="cid" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="32 letters and numbers" aria-label="Spotify Client ID">
+            <button type="button" class="pbtn" id="cidSave">Save</button>
+          </span>
+          <span class="done" id="cidBaked" hidden>Already built into this app.</span>
+        </li>
+        <li><b>Connect.</b> <span id="spStatus"></span>
+          <span class="inline"><button type="button" class="pbtn primary" id="spBtn">Connect Spotify</button></span>
+          Log in with your email and password (Google and Facebook buttons do not work inside TV apps), then press <b>Agree</b>.</li>
+        <li><b>Play any song</b> on your phone, PC or TV. It shows up here within a few seconds.</li>
+      </ol>
+      <p class="small">Choosing, pausing and skipping songs from here need Spotify Premium. Showing songs, lyrics and visuals works on free accounts. If Spotify says your account is not registered, add your email under <b>User Management</b> in the dashboard.</p>
+    </section>
+
+    <section class="pane" data-pane="settings" hidden>
+      <div class="field">
+        <div class="label"><b>Lyric animation</b><span>How each line comes in</span></div>
+        <div class="chips" id="textChips"></div>
       </div>
-    </div>
-    <div class="toggles">
-      <button type="button" class="tog" data-key="lyrics" aria-pressed="true">Lyrics</button>
-      <button type="button" class="tog" data-key="clock" aria-pressed="true">Clock</button>
-      <button type="button" class="tog" data-key="motion" aria-pressed="true">Motion</button>
-      <button type="button" class="tog" data-key="liveAudio" aria-pressed="true" id="togAudio">TV audio for bars</button>
-    </div>
-    <p class="small">Redirect URI for your Spotify app: <code id="redir"></code></p>
-    <p class="small" id="audioNote"></p>
-    <button type="button" class="pbtn" id="closePanel">Close</button>
-  </div>
+      <div class="field">
+        <div class="label"><b>Background</b><span id="sceneNote"></span></div>
+        <div class="chips" id="sceneChips"></div>
+      </div>
+      <div class="field">
+        <div class="label"><b>Show</b></div>
+        <div class="chips">
+          <button type="button" class="tog" data-key="lyrics">Lyrics</button>
+          <button type="button" class="tog" data-key="clock">Clock</button>
+          <button type="button" class="tog" data-key="ring">Progress ring</button>
+          <button type="button" class="tog" data-key="colour">Album colours</button>
+          <button type="button" class="tog" data-key="motion">Motion</button>
+          <button type="button" class="tog" data-key="drift">Screen-safe drift</button>
+          <button type="button" class="tog" data-key="liveAudio" id="togAudio">TV audio for bars</button>
+        </div>
+        <p class="small" id="audioNote"></p>
+      </div>
+      <div class="field">
+        <div class="label"><b>Lyrics timing</b><span>Nudge if lyrics run ahead of or behind the song</span></div>
+        <div class="inline stepper">
+          <button type="button" class="pbtn" id="lyrEarlier">Earlier</button>
+          <span class="val" id="lyrOffset">0.0 s</span>
+          <button type="button" class="pbtn" id="lyrLater">Later</button>
+        </div>
+      </div>
+    </section>
+  </aside>
 
   <div class="toast" id="toast" role="status" hidden></div>
 </div>
