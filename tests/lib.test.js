@@ -24,11 +24,15 @@ test('vibrantColor returns null for grey covers', () => {
 });
 
 
-test('textStyleFor keeps the chosen style and falls back to rise', () => {
+test('textStyleFor keeps a chosen style, and Rotate gives each song its own calm style', () => {
   assert.strictEqual(textStyleFor('abc', 'karaoke'), 'karaoke');
-  assert.strictEqual(textStyleFor('abc', 'rise'), 'rise');
-  assert.strictEqual(textStyleFor('abc', 'auto'), 'rise', 'the old Mix per song falls back');
-  assert.strictEqual(textStyleFor('abc', 'glitch'), 'rise', 'removed styles fall back');
+  const a = textStyleFor('song-1', 'auto');
+  assert.ok(TEXT_STYLES.includes(a));
+  assert.strictEqual(textStyleFor('song-1', 'auto'), a, 'same song keeps its style');
+  assert.strictEqual(textStyleFor('', 'auto'), 'rise');
+  assert.strictEqual(textStyleFor('x', 'glitch'), textStyleFor('x', 'auto'), 'removed styles rotate too');
+  const seen = new Set(Array.from({ length: 60 }, (_, i) => textStyleFor('id' + i, 'auto')));
+  assert.strictEqual(seen.size, TEXT_STYLES.length, 'all styles come up');
   assert.deepStrictEqual(TEXT_STYLES, ['rise', 'blur', 'karaoke', 'type']);
 });
 

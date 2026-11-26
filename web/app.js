@@ -97,10 +97,11 @@ function hashString(s) {
   for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
   return h >>> 0;
 }
-// One lyric style for every song (a random style per song, glitch and pop felt gimmicky).
+// Calm lyric styles. 'auto' (the default) rotates them: each song gets one, the same one every time it plays.
 var TEXT_STYLES = ['rise', 'blur', 'karaoke', 'type'];
 function textStyleFor(songId, setting) {
-  return TEXT_STYLES.indexOf(setting) >= 0 ? setting : 'rise';
+  if (TEXT_STYLES.indexOf(setting) >= 0) return setting;
+  return songId ? TEXT_STYLES[hashString(songId) % TEXT_STYLES.length] : 'rise';
 }
 
 /* A YouTube video id is 11 letters, digits, - or _. */
@@ -191,9 +192,9 @@ var store = {
   del: function (k) { try { localStorage.removeItem('er.' + k); } catch (e) { /* same as above */ } }
 };
 var settings = Object.assign({ motion: true, clock: true, lyrics: true, liveAudio: true, ring: true, colour: true, info: true,
-  drift: true, lyricOffset: 0, textStyle: 'rise', scene: 'cover' }, store.get('settings', {}));
+  drift: true, lyricOffset: 0, textStyle: 'auto', scene: 'cover' }, store.get('settings', {}));
 // choices that no longer exist fall back to the defaults
-if (TEXT_STYLES.indexOf(settings.textStyle) < 0) settings.textStyle = 'rise';
+if (settings.textStyle !== 'auto' && TEXT_STYLES.indexOf(settings.textStyle) < 0) settings.textStyle = 'auto';
 if (settings.scene !== 'off' && SCENES_LIST.indexOf(settings.scene) < 0) settings.scene = 'cover';
 function saveSettings() { store.set('settings', settings); }
 
@@ -1187,9 +1188,8 @@ function draw(t, dt) {
   if (cur) ctx.drawImage(cur, -r, -r, r * 2, r * 2);
   ctx.globalAlpha = 1; ctx.restore();
   drawSheen(ctx, cx, cy, r * sc);
-  ctx.save(); ctx.beginPath(); ctx.arc(cx, cy, r * sc, 0, TAU);
-  ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = Math.max(1.5, r * .016);
-  ctx.shadowColor = 'rgba(255,255,255,.95)'; ctx.shadowBlur = r * .22; ctx.stroke(); ctx.restore();
+  var rg = rimGlow(r);
+  ctx.drawImage(rg, cx - rg.width / 2 * sc, cy - rg.height / 2 * sc, rg.width * sc, rg.height * sc);
 
   var md = mini.width;
   mctx.setTransform(1, 0, 0, 1, 0, 0); mctx.clearRect(0, 0, md, md);
@@ -1206,17 +1206,35 @@ function draw(t, dt) {
 }
 
 function loop(t) {
+  requestAnimationFrame(loop);
+  // paused or nothing playing: about 15 frames a second is plenty for a slow, still scene and leaves the CPU to
+  // whatever else the TV is doing (controls and the menu keep full speed so the remote feels quick)
+  var idle = !np.playing && !DEMO && !stage.classList.contains('show-controls') && !wheel.open && !drawerOpen();
+  if (idle && last && t - last < 64) return;
   var dt = Math.min(.05, (t - (last || t)) / 1000); last = t;
   if (W) draw(t, dt);
   tickLyrics();
-  requestAnimationFrame(loop);
 }
 
 /* ---------- layout ---------- */
+/* The white rim with its glow, drawn once per size: a live shadowBlur every frame was one of the costliest parts on TVs. */
+var rimCache = { r: 0, c: null };
+function rimGlow(r) {
+  if (rimCache.c && rimCache.r === r) return rimCache.c;
+  var pad = Math.ceil(r * .5), d = Math.ceil(r * 2 + pad * 2), c = document.createElement('canvas');
+  c.width = c.height = d;
+  var g = c.getContext('2d');
+  g.beginPath(); g.arc(d / 2, d / 2, r, 0, TAU);
+  g.strokeStyle = 'rgba(255,255,255,.9)'; g.lineWidth = Math.max(1.5, r * .016);
+  g.shadowColor = 'rgba(255,255,255,.95)'; g.shadowBlur = r * .22; g.stroke();
+  rimCache = { r: r, c: c };
+  return c;
+}
 function resize() {
   W = window.innerWidth; H = window.innerHeight;
   if (!W || !H) return;
-  DPR = Math.min(2, window.devicePixelRatio || 1);
+  // the TV's WebView reports 2x; drawing the full-screen canvas at 1920x1080 there ran at about 10 fps
+  DPR = native ? 1 : Math.min(2, window.devicePixelRatio || 1);
   cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
   portrait = H > W;
   stage.classList.toggle('portrait', portrait);
@@ -1445,7 +1463,7 @@ function renderSettings() {
   $('togAudio').hidden = !native;
   var off = (settings.lyricOffset || 0) / 1000;
   $('lyrOffset').textContent = (off > 0 ? '+' : '') + off.toFixed(1) + ' s';
-  chipGroup($('textChips'), [['rise', 'Rise'], ['blur', 'Blur'], ['karaoke', 'Karaoke'], ['type', 'Typewriter']],
+  chipGroup($('textChips'), [['auto', 'Rotate'], ['rise', 'Rise'], ['blur', 'Blur'], ['karaoke', 'Karaoke'], ['type', 'Typewriter']],
     settings.textStyle, function (v) { settings.textStyle = v; saveSettings(); lyricKey = ''; renderSettings(); focusChip('textChips', v); });
   chipGroup($('sceneChips'), [['cover', 'Album cover'], ['artist', 'Singer'], ['video', 'Music video'], ['stars', 'Stars'], ['aurora', 'Aurora'], ['off', 'None']],
     settings.scene, function (v) { settings.scene = v; saveSettings(); renderSettings(); focusChip('sceneChips', v); });

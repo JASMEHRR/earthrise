@@ -137,19 +137,20 @@ button, input { font: inherit; color: inherit; }
 .stage.dimmed .dim { opacity: .55; }
 
 /* ---------- playback controls ---------- */
-.controls { position: absolute; left: 50%; bottom: 5vh; transform: translate(-50%, 12px); display: flex; align-items: center;
-  padding: 10px; border-radius: 999px; background: rgba(12, 15, 20, .78); box-shadow: 0 0 0 1px var(--line), 0 10px 40px rgba(0, 0, 0, .6);
+.controls { position: absolute; left: 50%; bottom: 4vh; transform: translate(-50%, 12px); display: flex; align-items: center;
+  padding: 6px; border-radius: 999px; background: rgba(12, 15, 20, .78); box-shadow: 0 0 0 1px var(--line), 0 10px 40px rgba(0, 0, 0, .6);
   opacity: 0; visibility: hidden; transition: opacity .3s ease, transform .3s ease, visibility 0s linear .3s; }
 .stage.show-controls .controls { opacity: 1; visibility: visible; transform: translate(-50%, 0); transition: opacity .3s ease, transform .3s ease, visibility 0s; }
-.stage.drawer-open .controls { left: calc(50% - min(240px, 46vw)); }
-.ctl { min-width: 56px; height: 56px; margin: 0 4px; border-radius: 999px; border: 0; background: transparent; cursor: pointer;
+/* centred in the space left of the menu (the menu is min(480px, max(340px, 36vw)) wide) */
+.stage.drawer-open .controls { left: calc(50% - min(240px, max(170px, 18vw))); }
+.ctl { min-width: 44px; height: 44px; margin: 0 3px; border-radius: 999px; border: 0; background: transparent; cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center; outline: none; transition: background .2s ease, transform .2s ease; }
-.ctl svg { width: 26px; height: 26px; fill: currentColor; }
+.ctl svg { width: 20px; height: 20px; fill: currentColor; }
 .ctl:hover { background: rgba(255, 255, 255, .1); }
 .ctl:focus { background: rgba(255, 255, 255, .16); box-shadow: 0 0 0 3px var(--focus); transform: scale(1.06); }
-.ctl.main { background: var(--fg); color: #05070a; min-width: 64px; height: 64px; }
+.ctl.main { background: var(--fg); color: #05070a; min-width: 50px; height: 50px; }
 .ctl.main:focus { background: #fff; }
-.ctl.wide { padding: 0 22px; font-weight: 700; font-size: 17px; }
+.ctl.wide { padding: 0 18px; font-weight: 700; font-size: 15px; }
 .ctl .i-pause { display: none; }
 .stage.is-playing .ctl .i-pause { display: block; }
 .stage.is-playing .ctl .i-play { display: none; }
@@ -229,8 +230,8 @@ input[type="text"]:focus { box-shadow: 0 0 0 3px var(--focus); }
   font-size: 16px; text-align: center; z-index: 5; }
 
 @media (max-width: 700px) {
-  .ctl { min-width: 46px; height: 46px; margin: 0 2px; }
-  .ctl.main { min-width: 54px; height: 54px; }
+  .ctl { min-width: 42px; height: 42px; margin: 0 2px; }
+  .ctl.main { min-width: 48px; height: 48px; }
   .ctl.wide { font-size: 15px; padding: 0 16px; }
   .stage.drawer-open .controls { display: none; }
 }
