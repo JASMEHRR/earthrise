@@ -431,7 +431,7 @@ function loadQueue() {
       seen[it.id] = true; queue.push(toItem(it));
     });
     buildRows(); renderInfo();
-    if (drawerOpen() && drawerTab === 'music') renderMusic();
+    if (drawerOpen() && drawerTab === 'music') renderDrawer();
     if (queue[0]) {
       prefetchLyrics(queue[0]);
       if (queue[0].art) { var pre = new Image(); pre.crossOrigin = 'anonymous'; pre.src = queue[0].art; }
@@ -1090,7 +1090,7 @@ window.onNativeKey = function (name) {
   if (name === 'playpause') togglePlay();
   else if (name === 'next') control('next');
   else if (name === 'prev') control('prev');
-  else if (name === 'menu') { if (drawerOpen()) closeDrawer(); else openDrawer('music'); }
+  else if (name === 'menu') { if (drawerOpen()) closeDrawer(); else openDrawer('settings'); }
 };
 window.handleBack = function () {
   if (drawerOpen()) { closeDrawer(); return true; }
@@ -1244,7 +1244,23 @@ function closeDrawer() {
   $('drawer').classList.remove('open'); stage.classList.remove('drawer-open');
   showControls(); var b = $('btnMusic'); if (b && b.getClientRects().length) b.focus({ preventScroll: true });
 }
+/**
+ * Redraws the menu without losing the remote's place. Lists and option buttons are rebuilt when the
+ * song or a setting changes (every few seconds while music plays); without this the focused button
+ * vanished and the next arrow press jumped back to the first tab.
+ */
 function renderDrawer() {
+  var f = document.activeElement, inside = f && $('drawer').contains(f) && f !== document.body;
+  var before = inside ? focusables() : [], idx = before.indexOf(f);
+  var key = inside ? (f.id || f.className + '|' + f.textContent.trim()) : '';
+  drawDrawer();
+  if (!inside || document.activeElement === f && f.isConnected) return;
+  var now = focusables(), same = null;
+  for (var i = 0; i < now.length && !same; i++) if ((now[i].id || now[i].className + '|' + now[i].textContent.trim()) === key) same = now[i];
+  var target = same || now[Math.min(Math.max(idx, 0), now.length - 1)];
+  if (target) target.focus({ preventScroll: true });
+}
+function drawDrawer() {
   Array.prototype.forEach.call(document.querySelectorAll('.tab[data-tab]'), function (b) {
     var on = b.dataset.tab === drawerTab; b.setAttribute('aria-selected', String(on)); b.classList.toggle('on', on);
   });
@@ -1493,7 +1509,8 @@ function ui() {
   renderInfo();
   markRows();
   if (!connected()) showControls();
-  if (drawerOpen() && drawerTab === 'settings') renderSettings();
+  // only the background note changes with the song; rebuilding the buttons here lost the remote's place
+  if (drawerOpen() && drawerTab === 'settings') $('sceneNote').textContent = sceneNoteText();
 }
 
 /* Right-hand now-playing panel: title, artist, album, time, up next. Hidden on narrow portrait screens. */

@@ -157,7 +157,8 @@ button, input { font: inherit; color: inherit; }
 .stage:not(.disconnected) #btnConnect { display: none; }
 
 /* ---------- side drawer ---------- */
-.drawer { position: absolute; top: 0; right: 0; bottom: 0; width: min(480px, 100vw); box-sizing: border-box; display: flex; flex-direction: column;
+/* a third of a TV screen (the page there is 960px wide), at most 480px on big screens */
+.drawer { position: absolute; top: 0; right: 0; bottom: 0; width: min(480px, max(340px, 36vw), 100vw); box-sizing: border-box; display: flex; flex-direction: column;
   background: var(--panel); box-shadow: -1px 0 0 var(--line), -20px 0 60px rgba(0, 0, 0, .7);
   transform: translateX(105%); visibility: hidden; transition: transform .35s cubic-bezier(.2, .8, .2, 1), visibility 0s linear .35s; }
 .drawer.open { transform: none; visibility: visible; transition: transform .35s cubic-bezier(.2, .8, .2, 1), visibility 0s; }
@@ -180,11 +181,11 @@ code { font-family: Consolas, ui-monospace, monospace; color: var(--fg); backgro
 .msec { margin-bottom: 18px; }
 .msec h3 { margin: 0 0 8px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
 .mlist { display: flex; flex-direction: column; }
-.mitem { display: flex; align-items: center; width: 100%; min-height: 56px; padding: 6px 10px; margin-bottom: 2px; border: 0; border-radius: 12px;
+.mitem { display: flex; align-items: center; width: 100%; min-height: 48px; padding: 5px 8px; margin-bottom: 2px; border: 0; border-radius: 12px;
   background: transparent; text-align: left; cursor: pointer; outline: none; }
 .mitem:hover { background: rgba(255, 255, 255, .07); }
 .mitem:focus { background: rgba(255, 255, 255, .1); box-shadow: 0 0 0 3px var(--focus); }
-.mitem img, .mitem .ph { flex: none; width: 44px; height: 44px; border-radius: 8px; margin-right: 12px; object-fit: cover; background: #222; }
+.mitem img, .mitem .ph { flex: none; width: 38px; height: 38px; border-radius: 8px; margin-right: 10px; object-fit: cover; background: #222; }
 .mitem .meta { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
 .mitem b { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mitem small { font-size: 13px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
