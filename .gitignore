@@ -18,3 +18,7 @@ local.properties
 *.iml
 .DS_Store
 Thumbs.db
+
+# Local previews and the first prototype page, kept out of the repo
+dist/
+earthrise-visualizer.html
