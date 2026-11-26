@@ -90,21 +90,6 @@ function layoutLine(text, maxWeight) {
 }
 
 /* Background scene for a list of Spotify artist genres, or null when nothing matches. */
-var SCENE_RULES = [
-  ['rain', /\b(sad|emo|melanchol|slowcore|sadcore|heartbreak)/],
-  ['lasers', /\b(edm|house|techno|trance|dubstep|electro|drum and bass|dnb|rave|hardstyle|club|big room)/],
-  ['grid', /\b(hip hop|rap|trap|drill|grime|phonk|synthwave|retrowave|cyberpunk|darkwave)/],
-  ['embers', /\b(rock|metal|punk|grunge|hardcore|bhangra|desi hip hop)/],
-  ['aurora', /\b(r&b|soul|romantic|bollywood|filmi|desi|ghazal|sufi|qawwali|romance|love)/],
-  ['bokeh', /\b(pop|k-pop|dance|disco|funk|punjabi|latin|reggaeton|afrobeat|indie)/],
-  ['stars', /\b(ambient|chill|lo-fi|lofi|acoustic|folk|classical|piano|jazz|sleep|meditation|instrumental|soundtrack)/]
-];
-function sceneForGenres(genres) {
-  if (!genres || !genres.length) return null;
-  var g = genres.join(' | ').toLowerCase();
-  for (var i = 0; i < SCENE_RULES.length; i++) if (SCENE_RULES[i][1].test(g)) return SCENE_RULES[i][0];
-  return null;
-}
 
 function hashString(s) {
   var h = 2166136261;
@@ -112,10 +97,10 @@ function hashString(s) {
   for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
   return h >>> 0;
 }
-var TEXT_STYLES = ['blur', 'rise', 'pop', 'type', 'karaoke', 'glitch'];
+// One lyric style for every song (a random style per song, glitch and pop felt gimmicky).
+var TEXT_STYLES = ['rise', 'blur', 'karaoke', 'type'];
 function textStyleFor(songId, setting) {
-  if (setting && setting !== 'auto' && TEXT_STYLES.indexOf(setting) >= 0) return setting;
-  return songId ? TEXT_STYLES[hashString(songId) % TEXT_STYLES.length] : 'blur';
+  return TEXT_STYLES.indexOf(setting) >= 0 ? setting : 'rise';
 }
 
 /* A YouTube video id is 11 letters, digits, - or _. */
@@ -180,7 +165,7 @@ function largestImage(images) {
 }
 
 var Lib = { parseLrc: parseLrc, lineIndexAt: lineIndexAt, layoutLine: layoutLine, vibrantColor: vibrantColor,
-  sceneForGenres: sceneForGenres, textStyleFor: textStyleFor, TEXT_STYLES: TEXT_STYLES,
+  textStyleFor: textStyleFor, TEXT_STYLES: TEXT_STYLES,
   isVideoId: isVideoId, videoIdsFrom: videoIdsFrom, quotaResetAt: quotaResetAt, largestImage: largestImage,
   isoDurationMs: isoDurationMs, rankVideos: rankVideos };
 if (typeof module !== 'undefined' && module.exports) { module.exports = Lib; return; }
@@ -197,7 +182,8 @@ var SCOPES = 'user-read-currently-playing user-read-playback-state user-modify-p
 var LIBRARY_SCOPES = ['user-read-recently-played', 'playlist-read-private', 'user-library-read'];
 var API = 'https://api.spotify.com/v1';
 var BPM = 118;
-var SCENES_LIST = ['cover', 'artist', 'video', 'stars', 'aurora', 'bokeh', 'rain', 'embers', 'lasers', 'grid'];
+// Calm backdrops only, and the same one for every song (the per-genre lasers, grids, rain and embers felt gimmicky).
+var SCENES_LIST = ['cover', 'artist', 'video', 'stars', 'aurora'];
 
 var store = {
   get: function (k, d) { try { var v = localStorage.getItem('er.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -205,7 +191,10 @@ var store = {
   del: function (k) { try { localStorage.removeItem('er.' + k); } catch (e) { /* same as above */ } }
 };
 var settings = Object.assign({ motion: true, clock: true, lyrics: true, liveAudio: true, ring: true, colour: true, info: true,
-  drift: true, lyricOffset: 0, textStyle: 'auto', scene: 'auto' }, store.get('settings', {}));
+  drift: true, lyricOffset: 0, textStyle: 'rise', scene: 'cover' }, store.get('settings', {}));
+// choices that no longer exist fall back to the defaults
+if (TEXT_STYLES.indexOf(settings.textStyle) < 0) settings.textStyle = 'rise';
+if (settings.scene !== 'off' && SCENES_LIST.indexOf(settings.scene) < 0) settings.scene = 'cover';
 function saveSettings() { store.set('settings', settings); }
 
 var stage = $('stage'), cv = $('scene'), ctx = cv.getContext('2d');
@@ -227,7 +216,7 @@ var link = store.get('link', null); // { base: 'http://192.168.x.x:5173', secret
 var np = { item: null, playing: false, progress: 0, at: 0, changedAt: 0, device: '', pausedAt: 0 };
 var queue = [], lastQueueAt = 0, rowsSig = '';
 var lyrics = null, lyricCache = {}, lyricInflight = {};
-var genreCache = {}, sceneAuto = null, artistImgCache = {};
+var genreCache = {}, artistImgCache = {};
 var artistImg = null, artistKey = '', artistBg = null, artistBlur = null, artistPrev = null, artistPrevBlur = null, artistFade = 1;
 var backoffUntil = 0, pollTimer = 0, refreshing = null;
 
@@ -245,7 +234,6 @@ function startDemo() {
   });
   np.item.album = 'Demo album';
   accentTarget = [120, 190, 255];
-  sceneAuto = 'aurora';
   // a made-up cover so the record and the "Album cover" background have something to show
   var art = document.createElement('canvas'); art.width = art.height = 300;
   var ag = art.getContext('2d'), lg = ag.createLinearGradient(0, 0, 300, 300);
@@ -337,7 +325,7 @@ function disconnect() {
   token = null; store.del('token');
   link = null; store.del('link'); linkPair = null;
   np = { item: null, playing: false, progress: 0, at: 0, changedAt: 0, device: '', pausedAt: 0 };
-  queue = []; lyrics = null; sceneAuto = null; library = {}; clearTimeout(pollTimer);
+  queue = []; lyrics = null; library = {}; clearTimeout(pollTimer);
   accentTarget = [255, 255, 255]; setDisc(null); buildRows(); ui(); renderDrawer();
 }
 
@@ -408,7 +396,7 @@ function poll() {
 }
 
 function setNothing() {
-  if (np.item) { np.item = null; queue = []; lyrics = null; sceneAuto = null; setDisc(null); buildRows(); accentTarget = [255, 255, 255]; }
+  if (np.item) { np.item = null; queue = []; lyrics = null; setDisc(null); buildRows(); accentTarget = [255, 255, 255]; }
   np.playing = false; np.device = ''; ui();
 }
 
@@ -454,13 +442,12 @@ function loadQueue() {
 /* One artist lookup gives both the genres (for "Match the music") and the singer's photo. */
 function loadGenres(item) {
   var aid = item.artistId;
-  if (!aid) { sceneAuto = null; loadArtistImage(''); return; }
-  if (genreCache[aid]) { sceneAuto = sceneForGenres(genreCache[aid]); item.genres = genreCache[aid]; loadArtistImage(artistImgCache[aid] || ''); return; }
-  sceneAuto = null;
+  if (!aid) { loadArtistImage(''); return; }
+  if (genreCache[aid]) { item.genres = genreCache[aid]; loadArtistImage(artistImgCache[aid] || ''); return; }
   apiJson('/artists/' + encodeURIComponent(aid)).then(function (j) {
     var g = (j && j.genres) || [];
     genreCache[aid] = g; artistImgCache[aid] = largestImage(j && j.images);
-    if (np.item && np.item.artistId === aid) { np.item.genres = g; sceneAuto = sceneForGenres(g); loadArtistImage(artistImgCache[aid]); ui(); }
+    if (np.item && np.item.artistId === aid) { np.item.genres = g; loadArtistImage(artistImgCache[aid]); ui(); }
   }).catch(function () {
     genreCache[aid] = []; artistImgCache[aid] = '';
     if (np.item && np.item.artistId === aid) loadArtistImage('');
@@ -650,6 +637,13 @@ function makeCoverBg(img) {
     s.getContext('2d').drawImage(img, 0, 0, 32, 32);
     g.imageSmoothingEnabled = true; g.drawImage(s, 0, 0, 256, 256);
   }
+  // how bright the cover is (0..1): bright covers get darkened more so white lyrics stay readable
+  c.lum = 0.3;
+  try {
+    var d = g.getImageData(0, 0, 256, 256).data, sum = 0, n = 0;
+    for (var i = 0; i < d.length; i += 64) { sum += .2126 * d[i] + .7152 * d[i + 1] + .0722 * d[i + 2]; n++; }
+    c.lum = sum / n / 255;
+  } catch (e) { /* cover from another site without CORS: keep the middle value */ }
   return c;
 }
 function setDisc(img) {
@@ -745,10 +739,8 @@ function mixRgba(c2, m, a) {
 var scene = { name: null, parts: null, fade: 0, t: 0 };
 function sceneName() {
   if (settings.scene === 'off') return null;
-  if (settings.scene !== 'auto' && SCENES_LIST.indexOf(settings.scene) >= 0) return settings.scene;
   if (!connected() || !np.item) return 'stars';
-  if (sceneAuto) return sceneAuto;
-  var c = accent; return c[0] > c[2] + 20 ? 'aurora' : 'stars';
+  return SCENES_LIST.indexOf(settings.scene) >= 0 ? settings.scene : 'cover';
 }
 function drawCoverImage(c, alpha, t, bass) {
   var s = Math.max(W / c.width, H / c.height) * (1.08 + .04 * Math.sin(t * .05) + bass * .02);
@@ -769,8 +761,9 @@ var SCENES = {
         g0.addColorStop(0, accentRgba(.35, .2)); g0.addColorStop(1, accentRgba(.05, .2));
         ctx.fillStyle = g0; ctx.fillRect(0, 0, W, H);
       }
-      // darken so the record, lyrics and info stay readable
-      ctx.fillStyle = 'rgba(0,0,0,' + (.5 - bass * .06) + ')'; ctx.fillRect(0, 0, W, H);
+      // darken so the record, lyrics and info stay readable (more for bright covers)
+      var lum = coverBg && coverBg.lum != null ? coverBg.lum : .3;
+      ctx.fillStyle = 'rgba(0,0,0,' + (.45 + .35 * lum - bass * .05) + ')'; ctx.fillRect(0, 0, W, H);
       var v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * .3, W / 2, H / 2, Math.max(W, H) * .75);
       v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,.65)');
       ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
@@ -823,24 +816,6 @@ var SCENES = {
       }
     }
   },
-  bokeh: {
-    init: function () {
-      var a = [], k = W / 1280;
-      for (var i = 0; i < 26; i++) a.push({ x: rand(0, W), y: rand(0, H), r: rand(24, 120) * k, vy: rand(4, 14), a: rand(.09, .2), m: rand(0, .5) });
-      return a;
-    },
-    draw: function (p, dt, t, bass) {
-      ctx.globalCompositeOperation = 'lighter';
-      for (var i = 0; i < p.length; i++) {
-        var b = p[i]; b.y -= b.vy * dt * (1 + bass * 2);
-        if (b.y < -b.r) { b.y = H + b.r; b.x = rand(0, W); }
-        var g = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, b.r);
-        g.addColorStop(0, accentRgba(b.a * (1 + bass * .8), b.m)); g.addColorStop(1, accentRgba(0, b.m));
-        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, TAU); ctx.fill();
-      }
-      ctx.globalCompositeOperation = 'source-over';
-    }
-  },
   aurora: {
     init: function () {
       return [{ y: .2, amp: .06, f: 1.3, sp: .22, ph: rand(0, TAU) }, { y: .28, amp: .05, f: 1.9, sp: .3, ph: rand(0, TAU) }, { y: .36, amp: .045, f: 1.1, sp: .17, ph: rand(0, TAU) }];
@@ -860,83 +835,6 @@ var SCENES = {
         ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
       }
       ctx.globalCompositeOperation = 'source-over';
-    }
-  },
-  rain: {
-    init: function () {
-      var n = Math.round(clamp(W * H / 9000, 80, 220)), a = [], k = H / 720;
-      for (var i = 0; i < n; i++) a.push({ x: rand(-.1, 1.1) * W, y: rand(0, H), len: rand(10, 28) * k, v: rand(500, 900) * k, a: rand(.06, .24) });
-      return a;
-    },
-    draw: function (p, dt) {
-      ctx.lineWidth = 1;
-      for (var i = 0; i < p.length; i++) {
-        var d = p[i]; d.y += d.v * dt; d.x += d.v * dt * .15;
-        if (d.y > H) { d.y = -d.len; d.x = rand(-.1, 1.1) * W; }
-        ctx.strokeStyle = accentRgba(d.a, .65);
-        ctx.beginPath(); ctx.moveTo(d.x, d.y); ctx.lineTo(d.x - d.len * .15, d.y - d.len); ctx.stroke();
-      }
-    }
-  },
-  embers: {
-    init: function () {
-      var n = Math.round(clamp(W * H / 12000, 50, 140)), a = [];
-      for (var i = 0; i < n; i++) a.push({ x: rand(0, W), y: rand(0, H), v: rand(20, 60), s: rand(.8, 2.6), ph: rand(0, TAU), a: rand(.3, .9) });
-      return a;
-    },
-    draw: function (p, dt, t, bass) {
-      ctx.globalCompositeOperation = 'lighter';
-      for (var i = 0; i < p.length; i++) {
-        var e = p[i]; e.y -= e.v * dt * (1 + bass * 2.5); e.x += Math.sin(t * 1.2 + e.ph) * 12 * dt;
-        if (e.y < -10) { e.y = H + 10; e.x = rand(0, W); }
-        var life = e.a * clamp(e.y / H, 0, 1);
-        ctx.fillStyle = mixRgba([255, 150, 70], .55, life * .25);
-        ctx.beginPath(); ctx.arc(e.x, e.y, e.s * 3, 0, TAU); ctx.fill();
-        ctx.fillStyle = mixRgba([255, 190, 120], .55, life);
-        ctx.beginPath(); ctx.arc(e.x, e.y, e.s, 0, TAU); ctx.fill();
-      }
-      ctx.globalCompositeOperation = 'source-over';
-    }
-  },
-  lasers: {
-    init: function () {
-      var a = [];
-      for (var i = 0; i < 6; i++) a.push({ ox: (i + .5) / 6, ph: rand(0, TAU), sp: rand(.3, .7), w: rand(.015, .04) });
-      return a;
-    },
-    draw: function (p, dt, t, bass) {
-      ctx.globalCompositeOperation = 'lighter';
-      var len = H * 1.4;
-      for (var i = 0; i < p.length; i++) {
-        var b = p[i], ox = b.ox * W, oy = H + 10, ang = -Math.PI / 2 + Math.sin(t * b.sp + b.ph) * .7;
-        var g = ctx.createLinearGradient(ox, oy, ox + Math.cos(ang) * len, oy + Math.sin(ang) * len);
-        g.addColorStop(0, accentRgba(.16 + bass * .35, .3)); g.addColorStop(1, accentRgba(0, .3));
-        ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(ox, oy);
-        ctx.lineTo(ox + Math.cos(ang - b.w) * len, oy + Math.sin(ang - b.w) * len);
-        ctx.lineTo(ox + Math.cos(ang + b.w) * len, oy + Math.sin(ang + b.w) * len);
-        ctx.closePath(); ctx.fill();
-      }
-      ctx.globalCompositeOperation = 'source-over';
-    }
-  },
-  grid: {
-    init: function () { return [{ off: 0 }]; },
-    draw: function (p, dt, t, bass) {
-      var hz = H * .64, cx = W / 2, st = p[0];
-      st.off = (st.off + dt * .5 * (1 + bass * 1.5)) % 1;
-      var g = ctx.createLinearGradient(0, hz - H * .08, 0, hz + H * .02);
-      g.addColorStop(0, accentRgba(0, .2)); g.addColorStop(1, accentRgba(.3 + bass * .15, .2));
-      ctx.fillStyle = g; ctx.fillRect(0, hz - H * .08, W, H * .1);
-      ctx.lineWidth = Math.max(1, H / 700);
-      for (var i = -16; i <= 16; i++) {
-        ctx.strokeStyle = accentRgba(.4, .2);
-        ctx.beginPath(); ctx.moveTo(cx + i * W * .02, hz); ctx.lineTo(cx + i * W * .17, H); ctx.stroke();
-      }
-      for (var k = 0; k < 14; k++) {
-        var d = (k + st.off) / 14, y = hz + (H - hz) * Math.pow(d, 2.2);
-        ctx.strokeStyle = accentRgba(.1 + d * .45 + bass * .12, .2);
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-      }
     }
   }
 };
@@ -1531,9 +1429,9 @@ function renderSettings() {
   $('togAudio').hidden = !native;
   var off = (settings.lyricOffset || 0) / 1000;
   $('lyrOffset').textContent = (off > 0 ? '+' : '') + off.toFixed(1) + ' s';
-  chipGroup($('textChips'), [['auto', 'Mix per song'], ['blur', 'Blur'], ['rise', 'Rise'], ['pop', 'Pop'], ['type', 'Typewriter'], ['karaoke', 'Karaoke'], ['glitch', 'Glitch']],
+  chipGroup($('textChips'), [['rise', 'Rise'], ['blur', 'Blur'], ['karaoke', 'Karaoke'], ['type', 'Typewriter']],
     settings.textStyle, function (v) { settings.textStyle = v; saveSettings(); lyricKey = ''; renderSettings(); focusChip('textChips', v); });
-  chipGroup($('sceneChips'), [['auto', 'Match the music'], ['cover', 'Album cover'], ['artist', 'Singer'], ['video', 'Music video'], ['off', 'None'], ['stars', 'Stars'], ['aurora', 'Aurora'], ['bokeh', 'Bokeh'], ['rain', 'Rain'], ['embers', 'Embers'], ['lasers', 'Lasers'], ['grid', 'Neon grid']],
+  chipGroup($('sceneChips'), [['cover', 'Album cover'], ['artist', 'Singer'], ['video', 'Music video'], ['stars', 'Stars'], ['aurora', 'Aurora'], ['off', 'None']],
     settings.scene, function (v) { settings.scene = v; saveSettings(); renderSettings(); focusChip('sceneChips', v); });
   var note = '';
   if (native) {
@@ -1546,10 +1444,6 @@ function renderSettings() {
 }
 function sceneNoteText() {
   var s = settings.scene;
-  if (s === 'auto') {
-    var g = np.item && np.item.genres && np.item.genres.length ? np.item.genres.slice(0, 3).join(', ') : '';
-    return g ? 'This song: ' + g + ' → ' + (sceneName() || 'none') + '.' : 'Uses the artist\'s genres from Spotify. Songs without genres get stars or aurora.';
-  }
   if (s === 'artist') return artistBg ? 'A photo of the singer, from Spotify.' : (np.item && connected() ? 'No singer photo for this song, so the album cover shows.' : 'Shows a photo of the singer, from Spotify.');
   if (s !== 'video') return '';
   var until = new Date(store.get('ytQuotaUntil', 0)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });

@@ -1,7 +1,7 @@
 // Run with: node --test tests
 const test = require('node:test');
 const assert = require('node:assert');
-const { parseLrc, lineIndexAt, layoutLine, vibrantColor, sceneForGenres, textStyleFor, TEXT_STYLES,
+const { parseLrc, lineIndexAt, layoutLine, vibrantColor, textStyleFor, TEXT_STYLES,
   isVideoId, videoIdsFrom, quotaResetAt, largestImage, isoDurationMs, rankVideos } = require('../web/app.js');
 
 function pixels(rgbList) {
@@ -23,28 +23,13 @@ test('vibrantColor returns null for grey covers', () => {
   assert.strictEqual(vibrantColor([]), null);
 });
 
-test('sceneForGenres maps genres to a background', () => {
-  assert.strictEqual(sceneForGenres(['deep house', 'electro']), 'lasers');
-  assert.strictEqual(sceneForGenres(['hip hop', 'trap']), 'grid');
-  assert.strictEqual(sceneForGenres(['filmi', 'modern bollywood']), 'aurora');
-  assert.strictEqual(sceneForGenres(['punjabi pop']), 'bokeh');
-  assert.strictEqual(sceneForGenres(['lo-fi beats']), 'stars');
-  assert.strictEqual(sceneForGenres(['alternative metal']), 'embers');
-  assert.strictEqual(sceneForGenres(['sad rap']), 'rain');
-  assert.strictEqual(sceneForGenres(['polka']), null);
-  assert.strictEqual(sceneForGenres([]), null);
-  assert.strictEqual(sceneForGenres(undefined), null);
-});
 
-test('textStyleFor honours a fixed choice and is stable per song in auto', () => {
+test('textStyleFor keeps the chosen style and falls back to rise', () => {
   assert.strictEqual(textStyleFor('abc', 'karaoke'), 'karaoke');
-  const a = textStyleFor('song-1', 'auto');
-  assert.ok(TEXT_STYLES.includes(a));
-  assert.strictEqual(textStyleFor('song-1', 'auto'), a, 'same song keeps its style');
-  assert.strictEqual(textStyleFor('', 'auto'), 'blur');
-  assert.strictEqual(textStyleFor('x', 'nonsense'), textStyleFor('x', 'auto'));
-  const seen = new Set(Array.from({ length: 60 }, (_, i) => textStyleFor('id' + i, 'auto')));
-  assert.ok(seen.size >= 4, 'auto spreads across several styles');
+  assert.strictEqual(textStyleFor('abc', 'rise'), 'rise');
+  assert.strictEqual(textStyleFor('abc', 'auto'), 'rise', 'the old Mix per song falls back');
+  assert.strictEqual(textStyleFor('abc', 'glitch'), 'rise', 'removed styles fall back');
+  assert.deepStrictEqual(TEXT_STYLES, ['rise', 'blur', 'karaoke', 'type']);
 });
 
 test('layoutLine treats Hindi filler words as small', () => {
