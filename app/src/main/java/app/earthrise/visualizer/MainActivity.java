@@ -25,7 +25,8 @@ import androidx.webkit.WebViewAssetLoader;
 /**
  * Full-screen WebView that runs the web app from the bundled assets (../web).
  * Native extras: Spotify login redirect (earthrise://callback), live TV audio
- * spectrum for the sound bars, remote media keys, and the Back button.
+ * spectrum for the sound bars, remote media keys, the Back button, and the link to Earthrise Link
+ * on the laptop (LinkClient).
  */
 public class MainActivity extends Activity {
     private static final String TAG = "Earthrise";
@@ -116,6 +117,19 @@ public class MainActivity extends Activity {
             return BuildConfig.YOUTUBE_API_KEY;
         }
 
+        /** Finds Earthrise Link on the laptop; answers window.onLinkResult(id, json). */
+        @JavascriptInterface
+        public void linkDiscover(final String id) {
+            new Thread(() -> answer(id, LinkClient.discover(2500)), "link-discover").start();
+        }
+
+        /** One /link/ call to the laptop (see LinkClient); answers window.onLinkResult(id, json). */
+        @JavascriptInterface
+        public void linkCall(final String id, final String method, final String base, final String path,
+                             final String body, final String secret) {
+            new Thread(() -> answer(id, LinkClient.call(method, base, path, body, secret)), "link-call").start();
+        }
+
         @JavascriptInterface
         public void setLiveAudio(final boolean on) {
             main.post(() -> {
@@ -127,6 +141,11 @@ public class MainActivity extends Activity {
                 }
             });
         }
+    }
+
+    private void answer(String id, String json) {
+        final String code = "window.onLinkResult&&onLinkResult(" + org.json.JSONObject.quote(id == null ? "" : id) + "," + json + ")";
+        main.post(() -> js(code));
     }
 
     private void js(String code) {

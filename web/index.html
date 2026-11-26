@@ -74,7 +74,20 @@
     </section>
 
     <section class="pane" data-pane="connect" hidden>
-      <p class="lead">Earthrise shows whatever your Spotify account is playing, on any device. Set it up once:</p>
+      <p class="lead">Earthrise shows whatever your Spotify account is playing, on any device.</p>
+      <div class="linkbox" id="linkBox" hidden>
+        <h3 class="sub">Use your laptop's Spotify login</h3>
+        <p class="small" id="linkText"></p>
+        <p class="linkcode" id="linkCode" hidden></p>
+        <span class="inline" id="linkManual" hidden>
+          <input id="linkIp" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="Laptop address, like 192.168.1.20" aria-label="Laptop address">
+          <button type="button" class="pbtn" id="linkIpGo">Connect</button>
+        </span>
+        <span class="inline"><button type="button" class="pbtn primary" id="linkBtn">Find my laptop</button></span>
+        <p class="small" id="linkNote"></p>
+        <h3 class="sub">Or set up this TV on its own</h3>
+      </div>
+      <p class="small">Set it up once:</p>
       <ol class="steps">
         <li><b>Make a free Spotify app.</b> On your phone or PC open <code>developer.spotify.com/dashboard</code>, log in, and press <b>Create app</b>. Any name and description work.</li>
         <li><b>Add the redirect address.</b> Under <b>Redirect URIs</b> type exactly <code id="redirMain"></code> and press Add.

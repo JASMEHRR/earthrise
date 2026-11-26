@@ -222,6 +222,8 @@ var accent = [255, 255, 255], accentTarget = [255, 255, 255];
 var lyricKey = '';
 
 var token = store.get('token', null);
+// Earthrise Link (link/ in this repo): the laptop holds the Spotify login and hands this TV tokens.
+var link = store.get('link', null); // { base: 'http://192.168.x.x:5173', secret, name }
 var np = { item: null, playing: false, progress: 0, at: 0, changedAt: 0, device: '', pausedAt: 0 };
 var queue = [], lastQueueAt = 0, rowsSig = '';
 var lyrics = null, lyricCache = {}, lyricInflight = {};
@@ -233,7 +235,7 @@ var backoffUntil = 0, pollTimer = 0, refreshing = null;
 var DEMO = /[?&]demo=1\b/.test(location.search);
 var DEMO_LRC = '[00:00.50]I keep the signal in my sight\n[00:04.50]Every city burning bright\n[00:08.50]Spin the planet slow\n' +
   '[00:12.50]Nowhere left to go\n[00:16.50]Falling up through the quiet\n[00:20.50]Weightless in the blue\n[00:24.50]Hold on to the orbit\n[00:28.50]Pulling me back to you\n[00:32.50]';
-function connected() { return !!token || DEMO; }
+function connected() { return !!token || !!link || DEMO; }
 function startDemo() {
   np = { item: { id: 'demo', title: 'Orbit Line', artist: 'Demo mode', album: '', duration: 33000, art: '', thumb: '', uri: '' },
     playing: true, progress: 0, at: performance.now(), changedAt: performance.now(), device: 'Demo speaker', pausedAt: 0 };
@@ -333,12 +335,20 @@ function handleCallback() {
 
 function disconnect() {
   token = null; store.del('token');
+  link = null; store.del('link'); linkPair = null;
   np = { item: null, playing: false, progress: 0, at: 0, changedAt: 0, device: '', pausedAt: 0 };
   queue = []; lyrics = null; sceneAuto = null; library = {}; clearTimeout(pollTimer);
   accentTarget = [255, 255, 255]; setDisc(null); buildRows(); ui(); renderDrawer();
 }
 
 function accessToken() {
+  if (link && (!token || token.linked)) { // the laptop refreshes the login; ask it again when under 2 minutes left
+    if (token && Date.now() < token.exp - 120000) return Promise.resolve(token.access);
+    if (!refreshing) {
+      refreshing = linkToken().then(function (v) { refreshing = null; return v; }, function (e) { refreshing = null; throw e; });
+    }
+    return refreshing;
+  }
   if (!token) return Promise.resolve(null);
   if (Date.now() < token.exp - 60000) return Promise.resolve(token.access);
   if (!refreshing) {
@@ -382,7 +392,7 @@ function toItem(it) {
 
 function poll() {
   clearTimeout(pollTimer);
-  if (!token) return;
+  if (!token && !link) return;
   var delay = 3000;
   if (Date.now() < backoffUntil) { pollTimer = setTimeout(poll, backoffUntil - Date.now()); return; }
   var t0 = performance.now();
@@ -393,7 +403,7 @@ function poll() {
     return r.json().then(function (j) { applyPlayback(j, rtt); delay = j.is_playing ? 2500 : 5000; });
   }).catch(function () { delay = 8000; }).then(function () {
     if (np.item && Date.now() - lastQueueAt > 20000) loadQueue();
-    if (token) pollTimer = setTimeout(poll, document.hidden ? 15000 : delay);
+    if (token || link) pollTimer = setTimeout(poll, document.hidden ? 15000 : delay);
   });
 }
 
@@ -474,7 +484,7 @@ function control(action) {
     else toast('Demo mode: skipping works once Spotify is connected.');
     return Promise.resolve(true);
   }
-  if (!token) { connect(); return Promise.resolve(false); }
+  if (!token && !link) { connectSpotify(); return Promise.resolve(false); }
   var map = { play: ['PUT', '/me/player/play'], pause: ['PUT', '/me/player/pause'], next: ['POST', '/me/player/next'], prev: ['POST', '/me/player/previous'] };
   var m = map[action];
   return api(m[1], { method: m[0] }).then(function (r) {
@@ -1404,7 +1414,99 @@ function renderMusic() {
     }).catch(function () { sec.list.innerHTML = ''; sec.list.appendChild(el('p', 'small', 'Could not load this from Spotify.')); });
   });
 }
+/* ---------- Earthrise Link on the laptop: pairing and tokens (calls go through LinkClient.java) ---------- */
+var linkCalls = {}, linkSeq = 0, linkPair = null, linkNote = '', linkPollT = 0;
+window.onLinkResult = function (id, res) { var cb = linkCalls[id]; delete linkCalls[id]; if (cb) cb(res || {}); };
+function linkNative(start) {
+  return new Promise(function (resolve) { var id = 'l' + (++linkSeq); linkCalls[id] = resolve; start(id); });
+}
+function linkCall(method, base, path, body, secret) {
+  return linkNative(function (id) { native.linkCall(id, method, base, path, body ? JSON.stringify(body) : '', secret || ''); });
+}
+function linkBody(r) { try { return JSON.parse(r.body || '{}'); } catch (e) { return {}; } }
+function linkToken() {
+  return linkCall('GET', link.base, '/link/token', null, link.secret).then(function (r) {
+    var j = linkBody(r);
+    if (r.status === 200 && j.access_token) {
+      token = { access: j.access_token, refresh: '', exp: Number(j.expires_at) || Date.now() + 50 * 60000, scope: j.scope || SCOPES, linked: true };
+      store.set('token', token);
+      if (linkNote) { linkNote = ''; renderDrawer(); }
+      return token.access;
+    }
+    if (r.status === 401) { // the laptop no longer knows this TV
+      link = null; store.del('link'); token = null; store.del('token');
+      linkNote = 'Your laptop forgot this TV. Pair again below.';
+    } else if (r.status === 409) linkNote = 'Log in to Spotify in Earthrise Link on your laptop.';
+    else linkNote = 'Cannot reach ' + ((link && link.name) || 'your laptop') + '. Is Earthrise Link running on it?';
+    renderDrawer();
+    throw new Error(linkNote);
+  });
+}
+/** Find the laptop on this Wi-Fi (or use the address typed in), then ask it to pair. */
+function linkStart(typed) {
+  if (!native || !native.linkCall) return;
+  clearTimeout(linkPollT);
+  linkPair = { step: 'finding' }; linkNote = ''; renderDrawer();
+  var parts = String(typed || '').split(':');
+  var found = typed
+    ? Promise.resolve(/^\d{1,3}(\.\d{1,3}){3}(:\d{2,5})?$/.test(typed) ? { ok: true, ip: parts[0], port: +(parts[1] || 5173), name: parts[0] } : { ok: false, bad: true })
+    : linkNative(function (id) { native.linkDiscover(id); });
+  found.then(function (f) {
+    if (!f || !f.ok) {
+      linkPair = { step: 'manual' };
+      linkNote = f && f.bad ? 'Type the address Earthrise Link shows, like 192.168.1.20.' : 'No laptop found. Start Earthrise Link on it, or type the address it shows.';
+      renderDrawer(); return;
+    }
+    var base = 'http://' + f.ip + ':' + (f.port || 5173);
+    return linkCall('POST', base, '/link/pair', { device: 'Fire TV' }).then(function (r) {
+      var j = linkBody(r);
+      if (r.status !== 200 || !j.pairId) {
+        linkPair = { step: 'manual' };
+        linkNote = r.status ? 'The laptop said no (' + r.status + ').' : 'Cannot reach ' + base.slice(7) + '. Is Earthrise Link running?';
+        renderDrawer(); return;
+      }
+      linkPair = { step: 'code', base: base, name: f.name || 'your laptop', id: j.pairId, code: String(j.code || '') };
+      renderDrawer(); linkWait();
+    });
+  });
+}
+function linkWait() {
+  if (!linkPair || linkPair.step !== 'code') return;
+  linkCall('GET', linkPair.base, '/link/pair/' + encodeURIComponent(linkPair.id)).then(function (r) {
+    if (!linkPair || linkPair.step !== 'code') return;
+    var j = linkBody(r);
+    if (j.status === 'approved' && j.secret) {
+      link = { base: linkPair.base, secret: j.secret, name: linkPair.name };
+      store.set('link', link); linkPair = null; token = null; store.del('token');
+      linkToken().then(function () { toast('Connected through ' + link.name + '.'); ui(); poll(); hideControls(); })
+        .catch(function () { /* linkNote says why */ }).then(renderDrawer);
+      return;
+    }
+    if (j.status === 'denied' || j.status === 'expired') {
+      linkPair = { step: 'manual' };
+      linkNote = j.status === 'denied' ? 'The laptop said no.' : 'The code expired. Try again.';
+      renderDrawer(); return;
+    }
+    linkPollT = setTimeout(linkWait, 2000);
+  });
+}
+function renderLink() {
+  var box = $('linkBox');
+  box.hidden = !native || !native.linkCall;
+  if (box.hidden) return;
+  var p = linkPair || {}, code = $('linkCode');
+  code.hidden = p.step !== 'code';
+  if (p.step === 'code') code.textContent = p.code;
+  $('linkManual').hidden = p.step !== 'manual';
+  $('linkText').textContent = link ? 'Using the Spotify login on ' + link.name + '.'
+    : p.step === 'finding' ? 'Looking for your laptop on this Wi-Fi...'
+    : p.step === 'code' ? 'On ' + p.name + ', press Allow when Earthrise Link shows this code:'
+    : 'Run Earthrise Link on your laptop (link\\start.cmd) and log in to Spotify there. Then:';
+  $('linkNote').textContent = linkNote;
+  $('linkBtn').textContent = link ? 'Stop using the laptop' : (p.step === 'code' || p.step === 'finding') ? 'Cancel' : 'Find my laptop';
+}
 function renderConnect() {
+  renderLink();
   var baked = clientIdBaked();
   $('redirMain').textContent = REDIRECT;
   $('redirTv').hidden = !!native;
@@ -1614,7 +1716,12 @@ $('wheelBtn').addEventListener('click', function () { if (wheel.dragged) return;
 $('btnPlay').addEventListener('click', togglePlay);
 $('btnNext').addEventListener('click', function () { control('next'); });
 $('btnPrev').addEventListener('click', function () { control('prev'); });
-$('btnConnect').addEventListener('click', function () { if (clientId()) connect(); else openDrawer('connect'); });
+/** Connect Spotify: on the TV, use the laptop's login (Earthrise Link) first; the on-TV login stays in the Connect tab. */
+function connectSpotify() {
+  if (native && native.linkCall) { openDrawer('connect'); if (!link && !linkPair) linkStart(); return; }
+  if (clientId()) connect(); else openDrawer('connect');
+}
+$('btnConnect').addEventListener('click', connectSpotify);
 $('btnMusic').addEventListener('click', function () { if (drawerOpen() && drawerTab === 'music') closeDrawer(); else openDrawer('music'); });
 $('btnSettings').addEventListener('click', function () { if (drawerOpen() && drawerTab === 'settings') closeDrawer(); else openDrawer('settings'); });
 $('drawerClose').addEventListener('click', closeDrawer);
@@ -1622,6 +1729,12 @@ Array.prototype.forEach.call(document.querySelectorAll('.tab[data-tab]'), functi
   b.addEventListener('click', function () { drawerTab = b.dataset.tab; renderDrawer(); b.focus({ preventScroll: true }); });
 });
 $('spBtn').addEventListener('click', function () { if (token) { disconnect(); toast('Spotify disconnected.'); } else connect(); });
+$('linkBtn').addEventListener('click', function () {
+  if (link) { disconnect(); toast('No longer using the laptop.'); return; }
+  if (linkPair && (linkPair.step === 'code' || linkPair.step === 'finding')) { clearTimeout(linkPollT); linkPair = null; linkNote = ''; renderDrawer(); return; }
+  linkStart();
+});
+$('linkIpGo').addEventListener('click', function () { linkStart($('linkIp').value.trim()); });
 $('cidSave').addEventListener('click', function () {
   var v = $('cid').value.trim();
   if (!/^[0-9a-f]{32}$/i.test(v)) { toast('A Spotify Client ID is 32 letters and numbers.'); return; }
@@ -1671,7 +1784,7 @@ setInterval(tickClock, 10000); setInterval(tickScreenCare, 5000);
 applyLiveAudio();
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { lyricKey = ''; });
 handleCallback().then(function () {
-  ui(); if (token) poll();
+  ui(); if (token || link) poll();
   if (connected()) hideControls(); else showControls();
   if (!connected() && !clientId()) openDrawer('connect');
 });

@@ -15,7 +15,10 @@
         android:banner="@drawable/banner"
         android:icon="@drawable/ic_launcher"
         android:label="@string/app_name"
-        android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
+        android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+        android:usesCleartextTraffic="true">
+        <!-- cleartext only for Earthrise Link on the laptop (LinkClient allows private addresses only);
+             the page itself stays https -->
 
         <activity
             android:name=".MainActivity"

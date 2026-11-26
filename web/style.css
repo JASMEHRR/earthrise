@@ -206,6 +206,8 @@ code { font-family: Consolas, ui-monospace, monospace; color: var(--fg); backgro
 .steps li b { color: var(--fg); }
 .steps li::marker { color: var(--fg); font-weight: 700; }
 .inline { display: flex; align-items: center; margin-top: 8px; }
+.linkbox { margin: 4px 0 18px; }
+.linkcode { margin: 6px 0 10px; font-size: 44px; font-weight: 700; letter-spacing: .3em; color: var(--fg); }
 .inline input { flex: 1 1 auto; min-width: 0; margin-right: 8px; }
 .done { display: block; margin-top: 6px; color: var(--fg); font-weight: 600; }
 .sub { margin: 26px 0 4px; padding-top: 18px; border-top: 1px solid rgba(255,255,255,.12); font-size: 17px; font-weight: 700; color: var(--fg); }
