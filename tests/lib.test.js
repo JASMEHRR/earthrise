@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { parseLrc, lineIndexAt, layoutLine, vibrantColor, sceneForGenres, textStyleFor, TEXT_STYLES,
-  isVideoId, videoIdsFrom, quotaResetAt, largestImage } = require('../web/app.js');
+  isVideoId, videoIdsFrom, quotaResetAt, largestImage, isoDurationMs, rankVideos } = require('../web/app.js');
 
 function pixels(rgbList) {
   const out = [];
@@ -127,4 +127,35 @@ test('largestImage picks the widest photo and handles empty lists', () => {
   assert.strictEqual(largestImage([{ url: 'only' }]), 'only');
   assert.strictEqual(largestImage([]), '');
   assert.strictEqual(largestImage(undefined), '');
+});
+
+test('isoDurationMs reads YouTube durations', () => {
+  assert.strictEqual(isoDurationMs('PT3M48S'), 228000);
+  assert.strictEqual(isoDurationMs('PT1H2M3S'), 3723000);
+  assert.strictEqual(isoDurationMs('PT45S'), 45000);
+  assert.strictEqual(isoDurationMs('P1DT1M'), 86460000);
+  assert.strictEqual(isoDurationMs(''), 0);
+  assert.strictEqual(isoDurationMs('nonsense'), 0);
+  assert.strictEqual(isoDurationMs(undefined), 0);
+});
+
+test('rankVideos drops Shorts and prefers the official video of the right length', () => {
+  const v = (id, title, dur, w, h) => ({ id, snippet: { title }, contentDetails: { duration: dur }, player: { embedWidth: String(w), embedHeight: String(h) } });
+  const ids = ['shortClip01', 'behindScene', 'officialAud', 'officialVid', 'lyricVideo1', 'otherSong01', 'unknownVid1'];
+  const details = { items: [
+    v('shortClip01', 'Lover #shorts', 'PT58S', 360, 640),
+    v('behindScene', 'LOVER Song: Behind The Scenes Video', 'PT3M12S', 640, 360),
+    v('officialAud', 'LOVER (Official Audio)', 'PT3M10S', 640, 360),
+    v('officialVid', 'LOVER (Official Music Video)', 'PT3M8S', 640, 360),
+    v('lyricVideo1', 'Lover (lyrics)', 'PT3M39S', 640, 360),
+    v('otherSong01', 'G.O.A.T. (Official Music Video)', 'PT3M44S', 640, 360)] };
+  const r = rankVideos(ids, details, 190000, 'Lover');
+  assert.strictEqual(r[0], 'officialVid');
+  assert.ok(!r.includes('shortClip01'), 'Shorts are dropped');
+  assert.ok(r.indexOf('otherSong01') > r.indexOf('officialAud'), 'a different song ranks below this song');
+  assert.ok(r.indexOf('behindScene') > r.indexOf('lyricVideo1'), 'behind-the-scenes ranks low');
+  assert.strictEqual(r[r.length - 1], 'unknownVid1');
+  assert.deepStrictEqual(rankVideos(['tallVideo01'], { items: [v('tallVideo01', 'Lover', 'PT3M8S', 360, 640)] }, 190000, 'Lover'), []);
+  assert.deepStrictEqual(rankVideos(['abcdefghijk'], null, 200000, 'x'), ['abcdefghijk']);
+  assert.deepStrictEqual(rankVideos([], details, 1, ''), []);
 });

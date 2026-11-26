@@ -129,6 +129,43 @@ function videoIdsFrom(json) {
   }
   return out;
 }
+/* "PT3M48S" (YouTube's duration format) in milliseconds; 0 when it cannot be read. */
+function isoDurationMs(s) {
+  var m = /^P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(s || '');
+  if (!m) return 0;
+  return (((+m[1] || 0) * 24 + (+m[2] || 0)) * 3600 + (+m[3] || 0) * 60 + (+m[4] || 0)) * 1000;
+}
+/* Orders search results for a song, best music video first. Drops vertical clips (Shorts) and anything under a
+   minute. Then scores each: lower is better. The official video usually runs about as long as the track and says
+   "official video" in its title; live, lyric, cover and behind-the-scenes uploads are pushed down, and so is any
+   video whose title does not contain the song's name.
+   ids: search order. details: videos.list items (contentDetails, player, snippet). trackMs, title: the song. */
+var VIDEO_PENALTIES = [
+  [/official\s+(music\s+)?video|official\s+mv\b/i, -8],
+  [/lyric/i, 4], [/\blive\b|concert|\bdome\b/i, 6], [/official\s+audio|\baudio\b|visuali[sz]er/i, 5],
+  [/behind\s+the\s+scenes|making\s+of|\bbts\b|teaser|trailer|reaction|\bcover\b|karaoke|instrumental|slowed|reverb|\b8d\b|remix|#shorts/i, 10]
+];
+function rankVideos(ids, details, trackMs, title) {
+  var info = {}, want = title ? norm(String(title)) : '';
+  ((details && details.items) || []).forEach(function (v) {
+    if (!v || !isVideoId(v.id)) return;
+    var w = Number(v.player && v.player.embedWidth) || 0, h = Number(v.player && v.player.embedHeight) || 0;
+    info[v.id] = { ms: isoDurationMs(v.contentDetails && v.contentDetails.duration), vertical: h > w && w > 0,
+      title: (v.snippet && v.snippet.title) || '' };
+  });
+  return (ids || []).filter(function (id) {
+    var v = info[id];
+    return !v || (!v.vertical && (!v.ms || v.ms >= 60000));
+  }).map(function (id, i) {
+    var v = info[id], score = 30; // nothing known about it: after any video we know is close
+    if (v) {
+      score = v.ms && trackMs ? Math.min(30, Math.abs(v.ms - trackMs) / 10000) : 10;
+      VIDEO_PENALTIES.forEach(function (p) { if (p[0].test(v.title)) score += p[1]; });
+      if (want && norm(v.title).indexOf(want) < 0) score += 12; // probably a different song by the same artist
+    }
+    return { id: id, score: score, i: i };
+  }).sort(function (a, b) { return a.score - b.score || a.i - b.i; }).map(function (x) { return x.id; });
+}
 /* YouTube's free daily quota resets at midnight Pacific time; 08:00 UTC is the later of the two (PST). */
 function quotaResetAt(now) {
   var d = new Date(now); d.setUTCHours(8, 0, 0, 0);
@@ -144,7 +181,8 @@ function largestImage(images) {
 
 var Lib = { parseLrc: parseLrc, lineIndexAt: lineIndexAt, layoutLine: layoutLine, vibrantColor: vibrantColor,
   sceneForGenres: sceneForGenres, textStyleFor: textStyleFor, TEXT_STYLES: TEXT_STYLES,
-  isVideoId: isVideoId, videoIdsFrom: videoIdsFrom, quotaResetAt: quotaResetAt, largestImage: largestImage };
+  isVideoId: isVideoId, videoIdsFrom: videoIdsFrom, quotaResetAt: quotaResetAt, largestImage: largestImage,
+  isoDurationMs: isoDurationMs, rankVideos: rankVideos };
 if (typeof module !== 'undefined' && module.exports) { module.exports = Lib; return; }
 
 /* ---------- setup ---------- */
@@ -953,8 +991,16 @@ function findVideo(item) {
       return;
     }
     var ids = videoIdsFrom(res.j);
-    rememberVideos(item.id, ids);
-    playVideos(ids);
+    if (!ids.length) { rememberVideos(item.id, []); playVideos([]); return; }
+    // one more call (1 unit, against 100 for the search) to read each result's length and shape
+    var dUrl = 'https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,player&maxWidth=640&id=' +
+      ids.join(',') + '&key=' + encodeURIComponent(key);
+    return fetch(dUrl).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }).then(function (d) {
+      if (yt.track !== item.id) return;
+      var ranked = d ? rankVideos(ids, d, item.duration, title) : ids; // details failed: keep search order
+      rememberVideos(item.id, ranked);
+      playVideos(ranked);
+    });
   }).catch(function () { if (yt.track === item.id) setYtStatus('offline'); });
 }
 function playVideos(ids) {
