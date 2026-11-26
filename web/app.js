@@ -118,8 +118,33 @@ function textStyleFor(songId, setting) {
   return songId ? TEXT_STYLES[hashString(songId) % TEXT_STYLES.length] : 'blur';
 }
 
+/* A YouTube video id is 11 letters, digits, - or _. */
+function isVideoId(s) { return typeof s === 'string' && /^[A-Za-z0-9_-]{11}$/.test(s); }
+/* Video ids from a YouTube Data API search response, best match first. */
+function videoIdsFrom(json) {
+  var items = (json && json.items) || [], out = [];
+  for (var i = 0; i < items.length; i++) {
+    var v = items[i] && items[i].id && items[i].id.videoId;
+    if (isVideoId(v) && out.indexOf(v) < 0) out.push(v);
+  }
+  return out;
+}
+/* YouTube's free daily quota resets at midnight Pacific time; 08:00 UTC is the later of the two (PST). */
+function quotaResetAt(now) {
+  var d = new Date(now); d.setUTCHours(8, 0, 0, 0);
+  if (d.getTime() <= now) d.setUTCDate(d.getUTCDate() + 1);
+  return d.getTime();
+}
+/* Largest photo from a Spotify images list (Spotify lists them biggest first, but do not rely on it). */
+function largestImage(images) {
+  var best = null;
+  (images || []).forEach(function (im) { if (im && im.url && (!best || (im.width || 0) > (best.width || 0))) best = im; });
+  return best ? best.url : '';
+}
+
 var Lib = { parseLrc: parseLrc, lineIndexAt: lineIndexAt, layoutLine: layoutLine, vibrantColor: vibrantColor,
-  sceneForGenres: sceneForGenres, textStyleFor: textStyleFor, TEXT_STYLES: TEXT_STYLES };
+  sceneForGenres: sceneForGenres, textStyleFor: textStyleFor, TEXT_STYLES: TEXT_STYLES,
+  isVideoId: isVideoId, videoIdsFrom: videoIdsFrom, quotaResetAt: quotaResetAt, largestImage: largestImage };
 if (typeof module !== 'undefined' && module.exports) { module.exports = Lib; return; }
 
 /* ---------- setup ---------- */
@@ -134,7 +159,7 @@ var SCOPES = 'user-read-currently-playing user-read-playback-state user-modify-p
 var LIBRARY_SCOPES = ['user-read-recently-played', 'playlist-read-private', 'user-library-read'];
 var API = 'https://api.spotify.com/v1';
 var BPM = 118;
-var SCENES_LIST = ['cover', 'stars', 'aurora', 'bokeh', 'rain', 'embers', 'lasers', 'grid'];
+var SCENES_LIST = ['cover', 'artist', 'video', 'stars', 'aurora', 'bokeh', 'rain', 'embers', 'lasers', 'grid'];
 
 var store = {
   get: function (k, d) { try { var v = localStorage.getItem('er.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
@@ -147,7 +172,7 @@ function saveSettings() { store.set('settings', settings); }
 
 var stage = $('stage'), cv = $('scene'), ctx = cv.getContext('2d');
 var mini = $('mini'), mctx = mini.getContext('2d');
-var lyrEl = $('lyrics'), rowsEl = $('rows');
+var lyrEl = $('lyrics'), rowsEl = $('rows'), videoEl = $('video');
 
 var W = 0, H = 0, DPR = 1, portrait = false, geo = {};
 var BARS = 120, HALF = BARS / 2;
@@ -162,7 +187,8 @@ var token = store.get('token', null);
 var np = { item: null, playing: false, progress: 0, at: 0, changedAt: 0, device: '', pausedAt: 0 };
 var queue = [], lastQueueAt = 0, rowsSig = '';
 var lyrics = null, lyricCache = {}, lyricInflight = {};
-var genreCache = {}, sceneAuto = null;
+var genreCache = {}, sceneAuto = null, artistImgCache = {};
+var artistImg = null, artistKey = '', artistBg = null, artistBlur = null, artistPrev = null, artistPrevBlur = null, artistFade = 1;
 var backoffUntil = 0, pollTimer = 0, refreshing = null;
 
 /* ?demo=1 shows a fake song with sample lines, for previewing without a Spotify login */
@@ -189,6 +215,15 @@ function startDemo() {
   ag.fillStyle = '#071827'; ag.beginPath(); ag.moveTo(0, 300); ag.lineTo(0, 210); ag.lineTo(90, 150); ag.lineTo(170, 220); ag.lineTo(240, 170); ag.lineTo(300, 230); ag.lineTo(300, 300); ag.fill();
   setTimeout(function () { setDisc(art); }, 0);
   setInterval(function () { if (np.playing && progressMs() > 33000) { np.progress = 0; np.at = performance.now(); } }, 500);
+  // preview helpers: ?scene=rain picks a background for this visit, ?artistImg= a Spotify photo, ?video= a YouTube id
+  var sc = demoParam('scene');
+  if (sc === 'off' || SCENES_LIST.indexOf(sc) >= 0) settings.scene = sc;
+  var ai = demoParam('artistImg');
+  if (/^https:\/\/i\.scdn\.co\/image\/[A-Za-z0-9]+$/.test(ai)) setTimeout(function () { loadArtistImage(ai); }, 0);
+}
+function demoParam(name) {
+  var m = new RegExp('[?&]' + name + '=([^&]*)').exec(location.search);
+  try { return m ? decodeURIComponent(m[1]) : ''; } catch (e) { return ''; }
 }
 
 function clientId() {
@@ -368,16 +403,20 @@ function loadQueue() {
   }).catch(function () { /* queue is a nice-to-have; the wheel just shows the current song */ });
 }
 
+/* One artist lookup gives both the genres (for "Match the music") and the singer's photo. */
 function loadGenres(item) {
   var aid = item.artistId;
-  if (!aid) { sceneAuto = null; return; }
-  if (genreCache[aid]) { sceneAuto = sceneForGenres(genreCache[aid]); item.genres = genreCache[aid]; return; }
+  if (!aid) { sceneAuto = null; loadArtistImage(''); return; }
+  if (genreCache[aid]) { sceneAuto = sceneForGenres(genreCache[aid]); item.genres = genreCache[aid]; loadArtistImage(artistImgCache[aid] || ''); return; }
   sceneAuto = null;
   apiJson('/artists/' + encodeURIComponent(aid)).then(function (j) {
     var g = (j && j.genres) || [];
-    genreCache[aid] = g;
-    if (np.item && np.item.artistId === aid) { np.item.genres = g; sceneAuto = sceneForGenres(g); ui(); }
-  }).catch(function () { genreCache[aid] = []; });
+    genreCache[aid] = g; artistImgCache[aid] = largestImage(j && j.images);
+    if (np.item && np.item.artistId === aid) { np.item.genres = g; sceneAuto = sceneForGenres(g); loadArtistImage(artistImgCache[aid]); ui(); }
+  }).catch(function () {
+    genreCache[aid] = []; artistImgCache[aid] = '';
+    if (np.item && np.item.artistId === aid) loadArtistImage('');
+  });
 }
 
 function checkPlayResponse(r) {
@@ -573,6 +612,56 @@ function setDisc(img) {
   discPrev = disc; discFade = settings.motion && discPrev ? 0 : 1;
   disc = img ? makeDisc(img, discPx()) : blankDisc;
 }
+/* ---------- singer photo background ---------- */
+function loadArtistImage(url) {
+  if (url === artistKey) return;
+  artistKey = url;
+  if (!url) { setArtist(null); return; }
+  var img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = function () { if (artistKey === url) setArtist(img); };
+  img.onerror = function () { if (artistKey === url) setArtist(null); };
+  img.src = url;
+}
+function setArtist(img) {
+  artistImg = img;
+  artistPrev = artistBg; artistPrevBlur = artistBlur;
+  artistFade = settings.motion && artistPrev ? 0 : 1;
+  artistBg = img ? makeArtistBg(img) : null;
+  artistBlur = img ? makeCoverBg(img) : null;
+}
+/* The photo with soft edges. On wide screens it fades out to the right, so the singer stands left of the record,
+   behind the big lyric words, and the small song-info text on the right keeps a clean dark background. */
+function makeArtistBg(img) {
+  var iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+  if (!iw || !ih) return null;
+  var s = Math.min(1, 720 / Math.max(iw, ih)), w = Math.round(iw * s), h = Math.round(ih * s);
+  var c = document.createElement('canvas'); c.width = w; c.height = h;
+  var g = c.getContext('2d'), m;
+  g.drawImage(img, 0, 0, w, h);
+  g.globalCompositeOperation = 'destination-in';
+  if (!portrait) {
+    m = g.createLinearGradient(0, 0, w, 0);
+    m.addColorStop(0, 'rgba(0,0,0,.4)'); m.addColorStop(.1, 'rgba(0,0,0,1)'); m.addColorStop(.58, 'rgba(0,0,0,1)'); m.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = m; g.fillRect(0, 0, w, h);
+  }
+  m = g.createLinearGradient(0, 0, 0, h);
+  m.addColorStop(0, 'rgba(0,0,0,.5)'); m.addColorStop(.14, 'rgba(0,0,0,1)'); m.addColorStop(.72, 'rgba(0,0,0,1)'); m.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = m; g.fillRect(0, 0, w, h);
+  return c;
+}
+function drawArtistImage(c, blur, alpha, t, bass) {
+  if (blur) drawCoverImage(blur, alpha * .45, t, bass);
+  if (!c) return;
+  var z = 1.03 + .03 * Math.sin(t * .045) + bass * .015, w, h, x, y;
+  if (portrait) { w = W * 1.15 * z; h = w * c.height / c.width; x = (W - w) / 2; y = 0; }
+  else {
+    h = H * 1.06 * z; w = h * c.width / c.height;
+    x = -W * .04 + Math.sin(t * .03) * W * .012; y = (H - h) / 2 + Math.cos(t * .025) * H * .012;
+  }
+  ctx.globalAlpha = alpha; ctx.drawImage(c, x, y, w, h); ctx.globalAlpha = 1;
+}
+
 function loadArt(url) {
   if (!url) { setDisc(null); accentTarget = [255, 255, 255]; return; }
   var img = new Image();
@@ -639,6 +728,35 @@ var SCENES = {
       ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
     }
   },
+  artist: {
+    init: function () { return []; },
+    draw: function (p, dt, t, bass) {
+      if (!artistBg && (!artistPrev || artistFade >= 1)) { SCENES.cover.draw(p, dt, t, bass); return; }
+      if (artistFade < 1) artistFade = Math.min(1, artistFade + dt * 1.2);
+      if (artistPrev && artistFade < 1) drawArtistImage(artistPrev, artistPrevBlur, 1, t, bass);
+      if (artistBg) drawArtistImage(artistBg, artistBlur, artistPrev ? artistFade : 1, t, bass);
+      // darken a little everywhere so the white lyrics stay readable, and more on the right behind the song info
+      ctx.fillStyle = 'rgba(0,0,0,' + (.3 - bass * .05) + ')'; ctx.fillRect(0, 0, W, H);
+      var lg = ctx.createLinearGradient(0, 0, W, 0);
+      lg.addColorStop(0, 'rgba(0,0,0,.15)'); lg.addColorStop(.5, 'rgba(0,0,0,0)'); lg.addColorStop(1, 'rgba(0,0,0,.45)');
+      ctx.fillStyle = lg; ctx.fillRect(0, 0, W, H);
+    }
+  },
+  video: {
+    init: function () { return []; },
+    draw: function (p, dt, t, bass) {
+      if (yt.mix < 1) SCENES.cover.draw(p, dt, t, bass);
+      if (yt.mix <= 0) return;
+      // cut through the canvas so the video underneath shows, then shade it so the record and text stay readable
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.fillStyle = 'rgba(0,0,0,' + yt.mix + ')'; ctx.fillRect(0, 0, W, H);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = 'rgba(0,0,0,' + (.42 * yt.mix) + ')'; ctx.fillRect(0, 0, W, H);
+      var v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * .3, W / 2, H / 2, Math.max(W, H) * .75);
+      v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,' + (.6 * yt.mix) + ')');
+      ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+    }
+  },
   stars: {
     init: function () {
       var n = Math.round(clamp(W * H / 6000, 120, 320)), a = [];
@@ -660,7 +778,7 @@ var SCENES = {
   bokeh: {
     init: function () {
       var a = [], k = W / 1280;
-      for (var i = 0; i < 22; i++) a.push({ x: rand(0, W), y: rand(0, H), r: rand(24, 120) * k, vy: rand(4, 14), a: rand(.04, .11), m: rand(0, .6) });
+      for (var i = 0; i < 26; i++) a.push({ x: rand(0, W), y: rand(0, H), r: rand(24, 120) * k, vy: rand(4, 14), a: rand(.09, .2), m: rand(0, .5) });
       return a;
     },
     draw: function (p, dt, t, bass) {
@@ -759,16 +877,16 @@ var SCENES = {
       var hz = H * .64, cx = W / 2, st = p[0];
       st.off = (st.off + dt * .5 * (1 + bass * 1.5)) % 1;
       var g = ctx.createLinearGradient(0, hz - H * .08, 0, hz + H * .02);
-      g.addColorStop(0, accentRgba(0, .3)); g.addColorStop(1, accentRgba(.14 + bass * .12, .3));
+      g.addColorStop(0, accentRgba(0, .2)); g.addColorStop(1, accentRgba(.3 + bass * .15, .2));
       ctx.fillStyle = g; ctx.fillRect(0, hz - H * .08, W, H * .1);
-      ctx.lineWidth = 1;
+      ctx.lineWidth = Math.max(1, H / 700);
       for (var i = -16; i <= 16; i++) {
-        ctx.strokeStyle = accentRgba(.16, .35);
+        ctx.strokeStyle = accentRgba(.4, .2);
         ctx.beginPath(); ctx.moveTo(cx + i * W * .02, hz); ctx.lineTo(cx + i * W * .17, H); ctx.stroke();
       }
       for (var k = 0; k < 14; k++) {
         var d = (k + st.off) / 14, y = hz + (H - hz) * Math.pow(d, 2.2);
-        ctx.strokeStyle = accentRgba(.05 + d * .22 + bass * .1, .35);
+        ctx.strokeStyle = accentRgba(.1 + d * .45 + bass * .12, .2);
         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
       }
     }
@@ -782,6 +900,133 @@ function drawScene(dt, t, bass) {
   ctx.globalAlpha = settings.motion ? scene.fade : 1;
   SCENES[n].draw(scene.parts, settings.motion ? dt : 0, t / 1000, bass);
   ctx.globalAlpha = 1;
+}
+
+/* ---------- music video background: a muted YouTube video kept at Spotify's position ---------- */
+var yt = { player: null, ready: false, loading: false, pending: null, track: '', list: [], idx: 0, vid: '', status: '', visible: false, mix: 0, seekAt: 0 };
+var ytCache = store.get('ytCache', {});
+if (!ytCache || typeof ytCache !== 'object' || Array.isArray(ytCache)) ytCache = {};
+function ytKey() {
+  var k = '';
+  try { k = native && native.getYoutubeKey ? String(native.getYoutubeKey() || '') : ''; } catch (e) { k = ''; }
+  return k || store.get('ytKey', '');
+}
+function ytKeyBaked() { try { return !!(native && native.getYoutubeKey && native.getYoutubeKey()); } catch (e) { return false; } }
+function setYtStatus(s) {
+  if (yt.status === s) return;
+  yt.status = s;
+  if (drawerOpen() && drawerTab === 'settings') $('sceneNote').textContent = sceneNoteText();
+}
+function rememberVideos(trackId, ids) {
+  ytCache[trackId] = ids;
+  var keys = Object.keys(ytCache);
+  if (keys.length > 400) keys.slice(0, keys.length - 300).forEach(function (k) { delete ytCache[k]; });
+  store.set('ytCache', ytCache);
+}
+function findVideo(item) {
+  yt.track = item.id; yt.list = []; yt.idx = 0; yt.vid = ''; yt.visible = false;
+  // stop the last song's video so it does not keep downloading while hidden
+  if (yt.ready) { try { yt.player.stopVideo(); } catch (e) { /* player already gone: nothing to stop */ } }
+  if (DEMO && !token) {
+    var d = demoParam('video');
+    if (isVideoId(d)) playVideos([d]); else setYtStatus('demo');
+    return;
+  }
+  if (Object.prototype.hasOwnProperty.call(ytCache, item.id)) { playVideos(ytCache[item.id]); return; }
+  var key = ytKey();
+  if (!key) { setYtStatus('nokey'); return; }
+  if (Date.now() < store.get('ytQuotaUntil', 0)) { setYtStatus('quota'); return; }
+  setYtStatus('searching');
+  // first artist and the bare title: "(feat. X)" and "- Remastered" make searches worse
+  var title = item.title.replace(/\s*[(\[][^)\]]*[)\]]/g, '').replace(/\s+-\s+.*$/, '');
+  var q = item.artist.split(',')[0] + ' ' + title + ' official video';
+  var url = 'https://www.googleapis.com/youtube/v3/search?part=id&type=video&videoEmbeddable=true&videoSyndicated=true&maxResults=5&q=' +
+    encodeURIComponent(q) + '&key=' + encodeURIComponent(key);
+  fetch(url).then(function (r) {
+    return r.json().catch(function () { return null; }).then(function (j) { return { ok: r.ok, j: j }; });
+  }).then(function (res) {
+    if (yt.track !== item.id) return;
+    if (!res.ok) {
+      var err = res.j && res.j.error, why = err && err.errors && err.errors[0] ? err.errors[0].reason : '';
+      if (why === 'quotaExceeded' || why === 'dailyLimitExceeded') { store.set('ytQuotaUntil', quotaResetAt(Date.now())); setYtStatus('quota'); }
+      else setYtStatus('keyerror');
+      return;
+    }
+    var ids = videoIdsFrom(res.j);
+    rememberVideos(item.id, ids);
+    playVideos(ids);
+  }).catch(function () { if (yt.track === item.id) setYtStatus('offline'); });
+}
+function playVideos(ids) {
+  yt.list = Array.isArray(ids) ? ids : []; yt.idx = 0;
+  if (!yt.list.length) { setYtStatus('none'); return; }
+  setYtStatus('loading');
+  withPlayer(cueVideo);
+}
+function cueVideo() {
+  var id = yt.list[yt.idx];
+  if (!id || !yt.track) return;
+  yt.vid = id; yt.seekAt = Date.now();
+  try { yt.player.loadVideoById({ videoId: id, startSeconds: Math.max(0, progressMs() / 1000) }); yt.player.mute(); }
+  catch (e) { yt.vid = ''; setYtStatus('offline'); }
+}
+/* Load YouTube's player script once, the first time a video is needed. */
+function withPlayer(cb) {
+  if (yt.ready) { cb(); return; }
+  yt.pending = cb;
+  if (yt.loading) return;
+  yt.loading = true;
+  window.onYouTubeIframeAPIReady = function () {
+    try {
+      yt.player = new YT.Player('ytFrame', {
+        width: '100%', height: '100%',
+        playerVars: { autoplay: 1, mute: 1, controls: 0, disablekb: 1, fs: 0, iv_load_policy: 3, playsinline: 1, rel: 0, origin: location.origin },
+        events: {
+          onReady: function () { yt.ready = true; yt.player.mute(); var f = yt.pending; yt.pending = null; if (f) f(); },
+          onError: onVideoError
+        }
+      });
+    } catch (e) { yt.loading = false; setYtStatus('offline'); }
+  };
+  var s = document.createElement('script');
+  s.src = 'https://www.youtube.com/iframe_api';
+  s.onerror = function () { yt.loading = false; s.parentNode.removeChild(s); setYtStatus('offline'); };
+  document.head.appendChild(s);
+}
+/* Video removed, private, or not allowed outside YouTube: try the next search result. */
+function onVideoError(e) {
+  var bad = yt.list[yt.idx];
+  if (window.console) console.warn('YouTube could not play ' + bad + ' (error ' + (e && e.data) + ')');
+  if (yt.track && Array.isArray(ytCache[yt.track])) rememberVideos(yt.track, ytCache[yt.track].filter(function (v) { return v !== bad; }));
+  yt.idx++; yt.vid = ''; yt.visible = false;
+  if (yt.idx < yt.list.length) cueVideo(); else setYtStatus('blocked');
+}
+function stopVideo() {
+  yt.track = ''; yt.vid = ''; yt.list = []; yt.visible = false; yt.pending = null;
+  if (yt.ready) { try { yt.player.stopVideo(); } catch (e) { /* player already gone: nothing to stop */ } }
+}
+/* Runs a few times a second: follows song changes, pause and seeking, and shows the video only while it is in time. */
+function tickVideo() {
+  var want = sceneName() === 'video' && !!np.item && connected();
+  videoEl.classList.toggle('live', want && !!yt.vid);
+  if (!want) { if (yt.track) stopVideo(); return; }
+  if (yt.track !== np.item.id) {
+    // wait until a song has been on for a moment, so skipping through songs does not use up YouTube's daily searches
+    if (performance.now() - np.changedAt > 1500 || DEMO) findVideo(np.item);
+    yt.visible = false; return;
+  }
+  if (!yt.ready || !yt.vid) { yt.visible = false; return; }
+  var st = -1, cur = 0, dur = 0;
+  try { st = yt.player.getPlayerState(); cur = yt.player.getCurrentTime() || 0; dur = yt.player.getDuration() || 0; }
+  catch (e) { yt.visible = false; return; }
+  var pos = progressMs() / 1000, now = Date.now();
+  if (dur && pos > dur - .5) { if (st === 1) yt.player.pauseVideo(); yt.visible = false; return; } // song is longer than the video
+  if (!np.playing) { if (st === 1) yt.player.pauseVideo(); }
+  else if (st !== 1 && st !== 3 && now - yt.seekAt > 1500) { yt.player.seekTo(pos, true); yt.player.playVideo(); yt.seekAt = now; }
+  else if (st === 1 && Math.abs(cur - pos) > 1.5 && now - yt.seekAt > 3000) { yt.player.seekTo(pos, true); yt.seekAt = now; }
+  // an advert or a stalled video shows up as a big time gap; keep the album cover up until it is in time
+  yt.visible = (st === 1 || st === 2) && Math.abs(cur - pos) < 2.5;
+  if (yt.visible) setYtStatus('playing');
 }
 
 /* ---------- song wheel (bottom-left) ---------- */
@@ -950,6 +1195,8 @@ function draw(t, dt) {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
   var cx = geo.cx, cy = geo.cy, r = geo.r, pulse = settings.motion ? bassSm : 0, sc = 1 + pulse * .045;
+  var showVid = yt.visible && sceneName() === 'video';
+  yt.mix = settings.motion ? clamp(yt.mix + (showVid ? dt * 1.2 : -dt * 2), 0, 1) : (showVid ? 1 : 0);
 
   drawScene(dt, t, pulse);
 
@@ -999,7 +1246,7 @@ function draw(t, dt) {
 
   lyrEl.style.transform = settings.motion ? 'scale(' + (1 + pulse * .025) + ')' : '';
   if (t - clockT > 300) {
-    clockT = t; tickInfo(); var c = curAccent();
+    clockT = t; tickInfo(); tickVideo(); var c = curAccent();
     stage.style.setProperty('--acc', 'rgb(' + Math.round(c[0]) + ',' + Math.round(c[1]) + ',' + Math.round(c[2]) + ')');
   }
 }
@@ -1022,6 +1269,7 @@ function resize() {
   geo = portrait ? { cx: W * .5, cy: H * .5, r: W * .18 } : { cx: W * .5, cy: H * .48, r: H * .17 };
   blankDisc = makeDisc(null, discPx());
   disc = artImg ? makeDisc(artImg, discPx()) : blankDisc; discPrev = null; discFade = 1;
+  artistBg = artistImg ? makeArtistBg(artistImg) : null; artistPrev = null; artistFade = 1;
   scene.name = null;
   layoutWheel();
   lyricKey = '';
@@ -1118,6 +1366,9 @@ function renderConnect() {
   $('cid').value = store.get('clientId', '');
   $('spStatus').textContent = token ? 'Connected.' : (DEMO ? 'Demo mode, not connected.' : 'Not connected yet.');
   $('spBtn').textContent = token ? 'Disconnect' : 'Connect Spotify';
+  var ytBaked = ytKeyBaked();
+  $('ytInput').hidden = ytBaked; $('ytBaked').hidden = !ytBaked;
+  $('ytk').value = store.get('ytKey', '');
 }
 function chipGroup(container, options, current, onPick) {
   container.innerHTML = '';
@@ -1134,7 +1385,7 @@ function renderSettings() {
   $('lyrOffset').textContent = (off > 0 ? '+' : '') + off.toFixed(1) + ' s';
   chipGroup($('textChips'), [['auto', 'Mix per song'], ['blur', 'Blur'], ['rise', 'Rise'], ['pop', 'Pop'], ['type', 'Typewriter'], ['karaoke', 'Karaoke'], ['glitch', 'Glitch']],
     settings.textStyle, function (v) { settings.textStyle = v; saveSettings(); lyricKey = ''; renderSettings(); focusChip('textChips', v); });
-  chipGroup($('sceneChips'), [['auto', 'Match the music'], ['cover', 'Album cover'], ['off', 'None'], ['stars', 'Stars'], ['aurora', 'Aurora'], ['bokeh', 'Bokeh'], ['rain', 'Rain'], ['embers', 'Embers'], ['lasers', 'Lasers'], ['grid', 'Neon grid']],
+  chipGroup($('sceneChips'), [['auto', 'Match the music'], ['cover', 'Album cover'], ['artist', 'Singer'], ['video', 'Music video'], ['off', 'None'], ['stars', 'Stars'], ['aurora', 'Aurora'], ['bokeh', 'Bokeh'], ['rain', 'Rain'], ['embers', 'Embers'], ['lasers', 'Lasers'], ['grid', 'Neon grid']],
     settings.scene, function (v) { settings.scene = v; saveSettings(); renderSettings(); focusChip('sceneChips', v); });
   var note = '';
   if (native) {
@@ -1143,8 +1394,29 @@ function renderSettings() {
     else if (nativeAudio.status === 'on') note = 'Bars follow the sound on this TV. When Spotify plays elsewhere they follow a simulated beat.';
   }
   $('audioNote').textContent = note;
-  var g = np.item && np.item.genres && np.item.genres.length ? np.item.genres.slice(0, 3).join(', ') : '';
-  $('sceneNote').textContent = settings.scene === 'auto' ? (g ? 'This song: ' + g + ' → ' + (sceneName() || 'none') + '.' : 'Uses the artist\'s genres from Spotify. Songs without genres get stars or aurora.') : '';
+  $('sceneNote').textContent = sceneNoteText();
+}
+function sceneNoteText() {
+  var s = settings.scene;
+  if (s === 'auto') {
+    var g = np.item && np.item.genres && np.item.genres.length ? np.item.genres.slice(0, 3).join(', ') : '';
+    return g ? 'This song: ' + g + ' → ' + (sceneName() || 'none') + '.' : 'Uses the artist\'s genres from Spotify. Songs without genres get stars or aurora.';
+  }
+  if (s === 'artist') return artistBg ? 'A photo of the singer, from Spotify.' : (np.item && connected() ? 'No singer photo for this song, so the album cover shows.' : 'Shows a photo of the singer, from Spotify.');
+  if (s !== 'video') return '';
+  var until = new Date(store.get('ytQuotaUntil', 0)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return {
+    nokey: 'Needs a free YouTube key. See the Connect tab, under Music video background.',
+    searching: 'Looking for the music video...',
+    loading: 'Loading the music video...',
+    playing: 'Muted music video, kept in time with the song. Some videos have a longer intro than the song.',
+    none: 'No music video found for this song, so the album cover shows.',
+    blocked: 'This song\'s videos only play on YouTube itself, so the album cover shows.',
+    quota: 'YouTube\'s free daily limit is used up. New videos come back at ' + until + '. Songs already found still play.',
+    keyerror: 'YouTube did not accept the key. Check that YouTube Data API v3 is turned on for it.',
+    offline: 'Could not reach YouTube, so the album cover shows.',
+    demo: 'Demo mode: connect Spotify to see music videos.'
+  }[yt.status] || 'Plays the song\'s music video, muted, behind the record.';
 }
 function focusChip(groupId, v) {
   var list = $(groupId).children, opts = Array.prototype.map.call(list, function (b) { return b; });
@@ -1308,6 +1580,13 @@ $('cidSave').addEventListener('click', function () {
   var v = $('cid').value.trim();
   if (!/^[0-9a-f]{32}$/i.test(v)) { toast('A Spotify Client ID is 32 letters and numbers.'); return; }
   store.set('clientId', v); toast('Client ID saved. Now press Connect Spotify (step 5).'); $('spBtn').focus();
+});
+$('ytSave').addEventListener('click', function () {
+  var v = $('ytk').value.trim();
+  if (v && !/^AIza[0-9A-Za-z_-]{35}$/.test(v)) { toast('A Google API key starts with AIza and is 39 characters long.'); return; }
+  if (v) store.set('ytKey', v); else store.del('ytKey');
+  store.del('ytQuotaUntil'); stopVideo(); yt.status = '';
+  toast(v ? 'YouTube key saved. In Settings, set Background to Music video.' : 'YouTube key removed.');
 });
 Array.prototype.forEach.call(document.querySelectorAll('.tog'), function (b) {
   b.addEventListener('click', function () {

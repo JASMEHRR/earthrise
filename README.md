@@ -44,3 +44,12 @@ When Spotify plays **on the TV itself**, the bars follow the real sound (the app
 - Web app: `web/` (plain HTML, CSS, JS, no build step). Preview with `python -m http.server 5173 --directory web` and open `http://127.0.0.1:5173/?demo=1` for a fake song without logging in. To log in on the web, add `http://127.0.0.1:5173/` as a Redirect URI in your Spotify app.
 - Tests: `node --test tests`
 - Android wrapper: `app/` (Java, WebView). The APK is built by GitHub Actions on every push to `main` and attached to a release.
+
+## Music video background (optional)
+
+Settings > Background > Music video plays each song's YouTube video, muted, behind the record. It needs a free YouTube Data API v3 key from console.cloud.google.com.
+
+- Web: paste it in the menu, Connect tab, under Music video background.
+- TV app: put it on the `YOUTUBE_API_KEY=` line in `.env`, then save it as the GitHub secret `YOUTUBE_API_KEY` so every build has it.
+
+Some label videos only play on YouTube itself; for those the album cover shows.

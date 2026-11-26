@@ -112,6 +112,11 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public String getYoutubeKey() {
+            return BuildConfig.YOUTUBE_API_KEY;
+        }
+
+        @JavascriptInterface
         public void setLiveAudio(final boolean on) {
             main.post(() -> {
                 wantAudio = on;

@@ -4,6 +4,7 @@ plugins {
 
 // Values come from the CI environment (see .github/workflows/build.yml). Local builds work without them.
 def clientId = System.getenv('SPOTIFY_CLIENT_ID') ?: ''
+def youtubeKey = System.getenv('YOUTUBE_API_KEY') ?: ''
 def keystorePath = System.getenv('KEYSTORE_PATH') ?: ''
 def keystorePassword = System.getenv('KEYSTORE_PASSWORD') ?: ''
 def hasReleaseKey = keystorePath && keystorePassword && file(keystorePath).exists()
@@ -19,6 +20,7 @@ android {
         versionCode((System.getenv('VERSION_CODE') ?: '1') as int)
         versionName "1.0.${System.getenv('VERSION_CODE') ?: '0'}"
         buildConfigField 'String', 'SPOTIFY_CLIENT_ID', "\"${clientId.replaceAll('[^0-9a-fA-F]', '')}\""
+        buildConfigField 'String', 'YOUTUBE_API_KEY', "\"${youtubeKey.replaceAll('[^0-9A-Za-z_-]', '')}\""
     }
 
     buildFeatures {

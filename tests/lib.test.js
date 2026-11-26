@@ -1,7 +1,8 @@
 // Run with: node --test tests
 const test = require('node:test');
 const assert = require('node:assert');
-const { parseLrc, lineIndexAt, layoutLine, vibrantColor, sceneForGenres, textStyleFor, TEXT_STYLES } = require('../web/app.js');
+const { parseLrc, lineIndexAt, layoutLine, vibrantColor, sceneForGenres, textStyleFor, TEXT_STYLES,
+  isVideoId, videoIdsFrom, quotaResetAt, largestImage } = require('../web/app.js');
 
 function pixels(rgbList) {
   const out = [];
@@ -102,4 +103,28 @@ test('layoutLine always has at least one big word and handles empty text', () =>
   assert.strictEqual(rows.flat().filter(x => x.big).length, 1);
   assert.deepStrictEqual(layoutLine(''), []);
   assert.deepStrictEqual(layoutLine(undefined), []);
+});
+
+test('videoIdsFrom keeps valid, unique video ids in order', () => {
+  const json = { items: [{ id: { videoId: 'dQw4w9WgXcQ' } }, { id: { channelId: 'UC123' } }, { id: { videoId: 'bad id!' } },
+    { id: { videoId: 'dQw4w9WgXcQ' } }, { id: { videoId: 'a_b-c1234XY' } }, null] };
+  assert.deepStrictEqual(videoIdsFrom(json), ['dQw4w9WgXcQ', 'a_b-c1234XY']);
+  assert.deepStrictEqual(videoIdsFrom({}), []);
+  assert.deepStrictEqual(videoIdsFrom(null), []);
+  assert.strictEqual(isVideoId('dQw4w9WgXcQ'), true);
+  assert.strictEqual(isVideoId('dQw4w9WgXc'), false);
+  assert.strictEqual(isVideoId(undefined), false);
+});
+
+test('quotaResetAt is the next 08:00 UTC', () => {
+  assert.strictEqual(quotaResetAt(Date.UTC(2026, 10, 26, 3, 0)), Date.UTC(2026, 10, 26, 8, 0));
+  assert.strictEqual(quotaResetAt(Date.UTC(2026, 10, 26, 8, 0)), Date.UTC(2026, 10, 27, 8, 0));
+  assert.strictEqual(quotaResetAt(Date.UTC(2026, 11, 31, 20, 0)), Date.UTC(2027, 0, 1, 8, 0));
+});
+
+test('largestImage picks the widest photo and handles empty lists', () => {
+  assert.strictEqual(largestImage([{ url: 'a', width: 160 }, { url: 'b', width: 640 }, { url: 'c', width: 320 }]), 'b');
+  assert.strictEqual(largestImage([{ url: 'only' }]), 'only');
+  assert.strictEqual(largestImage([]), '');
+  assert.strictEqual(largestImage(undefined), '');
 });

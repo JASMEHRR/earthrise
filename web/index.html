@@ -12,6 +12,7 @@
 </head>
 <body>
 <div class="stage" id="stage">
+  <div class="video" id="video" aria-hidden="true"><div id="ytFrame"></div></div>
   <canvas id="scene" aria-label="Spinning record with sound bars"></canvas>
   <div class="corner">
     <div class="clock" id="clock"></div>
@@ -92,6 +93,23 @@
         <li><b>Play any song</b> on your phone, PC or TV. It shows up here within a few seconds.</li>
       </ol>
       <p class="small">Choosing, pausing and skipping songs from here need Spotify Premium. Showing songs, lyrics and visuals works on free accounts. If Spotify says your account is not registered, add your email under <b>User Management</b> in the dashboard.</p>
+
+      <h3 class="sub">Music video background (optional)</h3>
+      <p class="small">Earthrise can play each song's music video, muted, behind the record. Finding the videos needs a free YouTube key:</p>
+      <ol class="steps">
+        <li><b>Open</b> <code>console.cloud.google.com</code>, log in, and create a project. Any name works.</li>
+        <li>Search for <b>YouTube Data API v3</b> and press <b>Enable</b>.</li>
+        <li>Open <b>Credentials</b>, press <b>Create credentials</b>, then <b>API key</b>. Under API restrictions, allow only <b>YouTube Data API v3</b>.</li>
+        <li><b>Paste the key here.</b>
+          <span class="inline" id="ytInput">
+            <input id="ytk" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Starts with AIza" aria-label="YouTube API key">
+            <button type="button" class="pbtn" id="ytSave">Save</button>
+          </span>
+          <span class="done" id="ytBaked" hidden>Already built into this app.</span>
+        </li>
+        <li>In <b>Settings</b>, set Background to <b>Music video</b>.</li>
+      </ol>
+      <p class="small">The free limit covers about 100 new songs a day. Songs already found are remembered, so replays cost nothing.</p>
     </section>
 
     <section class="pane" data-pane="settings" hidden>
