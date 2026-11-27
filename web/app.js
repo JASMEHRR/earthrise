@@ -580,6 +580,11 @@ function playSearch(q) {
         var hit = bestMatch(songs, r.text);
         if (!hit) { toast('Could not find ' + r.text + ' in ' + pl.title + '.'); return; }
         return playPlaylist(pl, hit.uri, r.shuffle);
+      }, function (e) {
+        if (!/HTTP 403/.test(String(e && e.message))) throw e;
+        // someone else's playlist: Spotify will not list its songs to this app, but it can play the playlist
+        toast('Spotify will not let Earthrise pick songs in a playlist you did not make. Playing ' + pl.title + '.');
+        return playPlaylist(pl, '', r.shuffle);
       });
     });
   } else if (r.kind === 'playlist' || r.kind === 'any') {
@@ -1547,7 +1552,13 @@ function openMusicView(v) {
     : v.kind === 'liked' ? likedSongs(function (sofar) { mine.items = sofar.slice(); done(); })
     : searchSpotify(v.q);
   load.then(function (res) { if (v.kind === 'search') mine.res = res; else mine.items = res; done(); })
-    .catch(function () { mine.error = 'Could not load this from Spotify.'; done(); });
+    .catch(function (e) {
+      // Spotify does not let apps in development mode list the songs of playlists someone else made (403);
+      // playing the whole playlist still works, so offer that
+      if (v.kind === 'playlist' && /HTTP 403/.test(String(e && e.message))) mine.locked = true;
+      else mine.error = 'Could not load this from Spotify.';
+      done();
+    });
 }
 function closeMusicView() {
   musicView = null; renderDrawer();
@@ -1590,6 +1601,10 @@ function renderMusicView(body) {
   }
   all.addEventListener('click', function () { play(false); }); mix.addEventListener('click', function () { play(true); });
   acts.appendChild(all); acts.appendChild(mix); body.appendChild(acts);
+  if (v.locked) {
+    body.appendChild(el('p', 'small', 'Someone else made this playlist, and Spotify only lets Earthrise list the songs in playlists you made. Play all and Shuffle still play it.'));
+    return;
+  }
   if (!v.items) { body.appendChild(el('p', 'small', 'Loading...')); return; }
   if (!v.items.length) { body.appendChild(el('p', 'small', 'No songs here.')); return; }
   var list = el('div', 'mlist'); body.appendChild(list);
