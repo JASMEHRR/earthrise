@@ -217,6 +217,9 @@ var $ = function (id) { return document.getElementById(id); };
 var clamp = function (v, a, b) { return Math.max(a, Math.min(b, v)); };
 var rand = function (a, b) { return a + Math.random() * (b - a); };
 var native = window.EarthriseNative || null;
+// On the Fire TV stick the glowing, per-letter lyrics were most of the lag (about 10 fps with them, 30+ without):
+// there they get a crisp shadow instead of a glow, only the word-by-word styles, and no beat pulse (style.css .tv).
+if (native) document.documentElement.classList.add('tv');
 var REDIRECT = native ? 'earthrise://callback' : location.origin + location.pathname;
 var SCOPES = 'user-read-currently-playing user-read-playback-state user-modify-playback-state ' +
   'user-read-recently-played playlist-read-private playlist-read-collaborative user-library-read';
@@ -704,6 +707,8 @@ function currentLyric() {
 /* Six entrance styles. "auto" picks one per song so each track feels different. */
 function showLyric(text, dur, nextText) {
   var style = textStyleFor(np.item ? np.item.id : '', settings.textStyle);
+  if (native && style === 'blur') style = 'rise'; // a moving blur per word is slow on the stick
+  if (native && style === 'type') style = 'karaoke'; // and so is animating every letter
   var old = lyrEl.querySelector('.block:not(.out)');
   var rows = layoutLine(text, portrait ? 17 : 21);
   var count = rows.reduce(function (n, r) { return n + r.length; }, 0);
@@ -1308,6 +1313,42 @@ function drawSheen(c, x, y, r) {
   c.fillStyle = g; c.beginPath(); c.arc(x, y, r, 0, TAU); c.fill();
 }
 
+function drawGlow(cx, cy, r, pulse) {
+  var gr = ctx.createRadialGradient(cx, cy, r * .8, cx, cy, r * 3.2);
+  gr.addColorStop(0, accentRgba(.22 + pulse * .22, .35));
+  gr.addColorStop(.35, accentRgba(.08 + pulse * .08, .15));
+  gr.addColorStop(1, accentRgba(0, .15));
+  ctx.fillStyle = gr; ctx.fillRect(0, 0, W, H);
+}
+
+/* On the Fire TV stick the backdrop (photo, blurred cover, two darkening layers and the colour glow) was five or six
+   full-screen passes every frame, painted by the processor there. For the cover and artist scenes it is composed
+   once into bgCache (again when the picture or size changes, while a picture fades in, and once a second for the
+   slowly changing colour) and copied in one pass. The photo stops drifting there; the rest looks the same. */
+var bgCache = null, bgKey = '', bgAt = 0, miniTick = false;
+function stillBackdrop(dt, t) {
+  var n = sceneName();
+  if (!native || (n !== 'cover' && n !== 'artist')) return false;
+  var key = [n, W, H, DPR, coverBg && coverBg.width, coverBg, artistBg, artistBlur].map(function (x) { return x && typeof x === 'object' ? (x.__id || (x.__id = Math.random())) : x; }).join('|');
+  var fading = coverFade < 1 || artistFade < 1 || scene.fade < 1 || scene.name !== n;
+  if (!bgCache || key !== bgKey || fading || t - bgAt > 1000) {
+    if (!bgCache) bgCache = document.createElement('canvas');
+    if (bgCache.width !== cv.width || bgCache.height !== cv.height) { bgCache.width = cv.width; bgCache.height = cv.height; }
+    var real = ctx;
+    ctx = bgCache.getContext('2d');
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    drawScene(dt, 0, 0);
+    drawGlow(geo.cx, geo.cy, geo.r, 0);
+    ctx = real;
+    bgKey = key; bgAt = t;
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(bgCache, 0, 0);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  return true;
+}
+
 function draw(t, dt) {
   var active = np.playing || nativeLive();
   sampleBars(t);
@@ -1318,13 +1359,10 @@ function draw(t, dt) {
   var showVid = yt.visible && sceneName() === 'video';
   yt.mix = settings.motion ? clamp(yt.mix + (showVid ? dt * 1.2 : -dt * 2), 0, 1) : (showVid ? 1 : 0);
 
-  drawScene(dt, t, pulse);
-
-  var gr = ctx.createRadialGradient(cx, cy, r * .8, cx, cy, r * 3.2);
-  gr.addColorStop(0, accentRgba(.22 + pulse * .22, .35));
-  gr.addColorStop(.35, accentRgba(.08 + pulse * .08, .15));
-  gr.addColorStop(1, accentRgba(0, .15));
-  ctx.fillStyle = gr; ctx.fillRect(0, 0, W, H);
+  if (!stillBackdrop(dt, t)) {
+    drawScene(dt, t, pulse);
+    drawGlow(cx, cy, r, pulse);
+  }
 
   var r0 = r * sc * 1.08;
   ctx.lineWidth = Math.max(1, TAU * r0 / BARS * .5); ctx.lineCap = 'butt';
@@ -1352,18 +1390,21 @@ function draw(t, dt) {
   if (discPrev && discFade < 1) { ctx.drawImage(discPrev, -r, -r, r * 2, r * 2); ctx.globalAlpha = discFade; }
   if (cur) ctx.drawImage(cur, -r, -r, r * 2, r * 2);
   ctx.globalAlpha = 1; ctx.restore();
-  drawSheen(ctx, cx, cy, r * sc);
+  if (!native) drawSheen(ctx, cx, cy, r * sc); // a new conic gradient every frame: skipped on the stick
   var rg = rimGlow(r);
   ctx.drawImage(rg, cx - rg.width / 2 * sc, cy - rg.height / 2 * sc, rg.width * sc, rg.height * sc);
 
   var md = mini.width;
+  miniTick = !miniTick;
+  if (native && miniTick) { /* the stick: the small disc every other frame */ } else {
   mctx.setTransform(1, 0, 0, 1, 0, 0); mctx.clearRect(0, 0, md, md);
   if (cur) { mctx.save(); mctx.translate(md / 2, md / 2); mctx.rotate(miniAngle); mctx.drawImage(cur, -md / 2, -md / 2, md, md); mctx.restore(); }
-  drawSheen(mctx, md / 2, md / 2, md / 2);
+  if (!native) drawSheen(mctx, md / 2, md / 2, md / 2);
   mctx.beginPath(); mctx.arc(md / 2, md / 2, md / 2 - DPR, 0, TAU);
   mctx.strokeStyle = 'rgba(255,255,255,.7)'; mctx.lineWidth = 1.5 * DPR; mctx.stroke();
+  }
 
-  lyrEl.style.transform = settings.motion ? 'scale(' + (1 + pulse * .025) + ')' : '';
+  lyrEl.style.transform = settings.motion && !native ? 'scale(' + (1 + pulse * .025) + ')' : '';
   if (t - clockT > 300) {
     clockT = t; tickInfo(); tickVideo(); var c = curAccent();
     stage.style.setProperty('--acc', 'rgb(' + Math.round(c[0]) + ',' + Math.round(c[1]) + ',' + Math.round(c[2]) + ')');
@@ -1376,6 +1417,7 @@ function loop(t) {
   // whatever else the TV is doing (controls and the menu keep full speed so the remote feels quick)
   var idle = !np.playing && !DEMO && !stage.classList.contains('show-controls') && !wheel.open && !drawerOpen();
   if (idle && last && t - last < 64) return;
+  if (native && last && t - last < 38) return; // the stick: about 24 frames a second, so the music and the remote stay smooth
   var dt = Math.min(.05, (t - (last || t)) / 1000); last = t;
   if (W) draw(t, dt);
   tickLyrics();

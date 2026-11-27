@@ -247,3 +247,8 @@ input[type="text"]:focus { box-shadow: 0 0 0 3px var(--focus); }
 .pane .inline .pbtn + .pbtn { margin-left: 8px; }
 #mMore, #mAllLiked { margin-top: 8px; align-self: flex-start; }
 .mhead + .inline { margin: 0 0 14px; }
+
+/* Fire TV stick (app.js adds .tv): no soft glows on the lyrics; a blurred text-shadow on every word was the main lag there */
+.tv .w, .tv .w.big, .tv .ch { text-shadow: 0 2px 0 rgba(0, 0, 0, .55); }
+.tv .anim-karaoke .w.on, .tv .anim-karaoke .w.big.on { text-shadow: 0 2px 0 rgba(0, 0, 0, .55); }
+.tv .block.out .w, .tv .block.out .ch { filter: none; }
