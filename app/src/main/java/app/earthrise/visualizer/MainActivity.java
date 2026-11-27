@@ -150,6 +150,37 @@ public class MainActivity extends Activity {
             new Thread(() -> answer(id, LinkClient.call(method, base, path, body, secret)), "link-call").start();
         }
 
+        /**
+         * Opens the TV's Spotify app for a moment so it joins Spotify Connect (asleep, it is not a
+         * device the page can play on), then brings Earthrise back. False when it is not installed.
+         */
+        @JavascriptInterface
+        public boolean wakeSpotify() {
+            PackageManager pm = getPackageManager();
+            android.content.Intent i = null;
+            for (String p : new String[]{"com.spotify.tv.android", "com.spotify.music"}) {
+                i = pm.getLeanbackLaunchIntentForPackage(p);
+                if (i == null) i = pm.getLaunchIntentForPackage(p);
+                if (i != null) break;
+            }
+            if (i == null) return false;
+            final android.content.Intent go = i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                    | android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION);
+            main.post(() -> {
+                try {
+                    startActivity(go);
+                } catch (RuntimeException e) {
+                    Log.w(TAG, "could not open Spotify: " + e);
+                    return;
+                }
+                main.postDelayed(() -> startActivity(new android.content.Intent(MainActivity.this, MainActivity.class)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                                | android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                                | android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION)), 4000);
+            });
+            return true;
+        }
+
         @JavascriptInterface
         public void setLiveAudio(final boolean on) {
             main.post(() -> {
