@@ -213,7 +213,10 @@ var lyricKey = '';
 
 var token = store.get('token', null);
 // Earthrise Link (link/ in this repo): the laptop holds the Spotify login and hands this TV tokens.
-var link = store.get('link', null); // { base: 'http://192.168.x.x:5173', secret, name }
+var link = store.get('link', null); // { base: 'http://192.168.x.x:5173', secret, name, v: 2 }
+// Since v2 the laptop hands its Spotify login over once and then forgets it, so links saved by older
+// versions (which kept asking the laptop for tokens) no longer work: drop them and show Connect again.
+if (link && link.v !== 2) { link = null; store.del('link'); if (token && token.linked) { token = null; store.del('token'); } }
 var np = { item: null, playing: false, progress: 0, at: 0, changedAt: 0, device: '', pausedAt: 0 };
 var queue = [], lastQueueAt = 0, rowsSig = '';
 var lyrics = null, lyricCache = {}, lyricInflight = {};
@@ -1407,8 +1410,15 @@ function linkWait() {
   linkCall('GET', linkPair.base, '/link/pair/' + encodeURIComponent(linkPair.id)).then(function (r) {
     if (!linkPair || linkPair.step !== 'code') return;
     var j = linkBody(r);
-    if (j.status === 'approved' && j.secret) {
-      link = { base: linkPair.base, secret: j.secret, name: linkPair.name };
+    if (j.status === 'approved' && j.spotify && j.spotify.refresh_token) {
+      // the laptop's login is now this TV's: from here it renews straight with Spotify (accessToken())
+      token = { access: j.spotify.access_token, refresh: j.spotify.refresh_token, exp: Number(j.spotify.expires_at) || 0, scope: j.spotify.scope || '' };
+      store.set('token', token); link = null; store.del('link'); linkPair = null; linkNote = '';
+      toast('Connected. The laptop is not needed any more.'); ui(); poll(); hideControls(); renderDrawer();
+      return;
+    }
+    if (r.status === 200 && j.status === 'approved' && j.secret && !j.error) { // an older laptop app: keep asking it for tokens
+      link = { base: linkPair.base, secret: j.secret, name: linkPair.name, v: 2 };
       store.set('link', link); linkPair = null; token = null; store.del('token');
       linkToken().then(function () { toast('Connected through ' + link.name + '.'); ui(); poll(); hideControls(); })
         .catch(function () { /* linkNote says why */ }).then(renderDrawer);
@@ -1419,6 +1429,10 @@ function linkWait() {
       linkNote = j.status === 'denied' ? 'The laptop said no.' : 'The code expired. Try again.';
       renderDrawer(); return;
     }
+    // allowed, but the laptop is not logged in to Spotify yet (409) or cannot reach it (502): keep waiting
+    var note = j.error === 'spotify_login_needed' ? 'Allowed. Now log in to Spotify in Earthrise Link on the laptop.'
+      : j.error === 'spotify_unreachable' ? 'Allowed. The laptop cannot reach Spotify right now, still trying.' : '';
+    if (note !== linkNote) { linkNote = note; renderDrawer(); }
     linkPollT = setTimeout(linkWait, 2000);
   });
 }
@@ -1431,6 +1445,7 @@ function renderLink() {
   if (p.step === 'code') code.textContent = p.code;
   $('linkManual').hidden = p.step !== 'manual';
   $('linkText').textContent = link ? 'Using the Spotify login on ' + link.name + '.'
+    : token && !p.step ? 'Connected. The laptop is not needed any more.'
     : p.step === 'finding' ? 'Looking for your laptop on this Wi-Fi...'
     : p.step === 'code' ? 'On ' + p.name + ', press Allow when Earthrise Link shows this code:'
     : 'Run Earthrise Link on your laptop (link\\start.cmd) and log in to Spotify there. Then:';
