@@ -451,7 +451,6 @@ function applyPlayback(j, rtt) {
   np.playing = !!j.is_playing;
   if (wasPlaying && !np.playing) np.pausedAt = performance.now();
   np.device = j.device && j.device.name ? j.device.name : '';
-  np.deviceId = j.device && j.device.id ? j.device.id : '';
   np.progress = (j.progress_ms || 0) + (np.playing ? rtt / 2 : 0);
   np.at = performance.now();
   if (!np.item || np.item.id !== id) { np.item = toItem(it); onTrackChange(); }
@@ -504,64 +503,6 @@ function checkPlayResponse(r) {
   if (!r.ok) { toast('Spotify did not accept that (' + r.status + ').'); return false; }
   return true;
 }
-/* On the TV, music goes to the TV's own Spotify app, not to whatever Spotify last used (a web
-   player left open in Chrome took the songs and played nothing). The TV's browser engine has no
-   Widevine, so Earthrise cannot play Spotify itself. When that app is asleep it is not listed, so
-   Earthrise opens it (EarthriseNative.wakeSpotify); the device that appears then is this TV, and it
-   is remembered. Earthrise comes back to the front once the song is really playing (expectSpotify). */
-function isTvDevice(d) { return !!d && !d.is_restricted && (/fire ?tv|aft[a-z]/i.test(d.name || '') || /^tv$/i.test(d.type || '')); }
-function pickTv(ds) {
-  ds = (ds || []).filter(function (d) { return !d.is_restricted; });
-  var mine = '';
-  try { mine = localStorage.getItem('er.tvDevice') || ''; } catch (e) { mine = ''; }
-  var tv = ds.filter(function (d) { return mine && d.name === mine; })[0] ||
-    ds.filter(function (d) { return isTvDevice(d) && /fire ?tv|aft[a-z]/i.test(d.name || ''); })[0] ||
-    ds.filter(isTvDevice)[0] || null;
-  return tv;
-}
-function rememberTv(d) { try { if (d) localStorage.setItem('er.tvDevice', d.name); } catch (e) { /* only a shortcut */ } }
-/* Spotify's TV app pops up on every play command and stops if covered before the song really
-   plays. So: tell Android to expect it, watch Spotify until the song is 2 s in, then come back on
-   top (Spotify keeps playing behind). */
-var watchSpotifyT = 0;
-function expectSpotify() {
-  if (!native || !native.expectSpotify) return;
-  native.expectSpotify();
-  clearTimeout(watchSpotifyT);
-  var until = Date.now() + 30000, start = null; // where the song was when Spotify first said "playing"
-  var check = function () {
-    if (Date.now() > until) return;
-    api('/me/player').then(function (r) { return r.status === 200 ? r.json() : null; }).catch(function () { return null; }).then(function (j) {
-      var at = j && j.is_playing ? (j.progress_ms || 0) : null;
-      if (at !== null && start === null) start = at;
-      if (at !== null && at - start >= 2000) { if (native.spotifyPlaying) native.spotifyPlaying(); return; }
-      if (at === null) start = null;
-      watchSpotifyT = setTimeout(check, 1000);
-    });
-  };
-  watchSpotifyT = setTimeout(check, 1500);
-}
-function listDevices() { return apiJson('/me/player/devices').then(function (j) { return (j && j.devices) || []; }); }
-function tvDevice() {
-  if (!native) return Promise.resolve(null);
-  var before = {};
-  var wait = function (n) {
-    return new Promise(function (res) { setTimeout(res, 1000); }).then(listDevices).then(function (ds) {
-      // the one that just appeared is Spotify on this TV, whatever it is called
-      var d = pickTv(ds) || ds.filter(function (x) { return !x.is_restricted && !before[x.id]; })[0];
-      if (d) { rememberTv(d); return d; }
-      return n > 0 ? wait(n - 1) : null;
-    });
-  };
-  return listDevices().then(function (ds) {
-    var d = pickTv(ds);
-    if (d) { rememberTv(d); return d; }
-    ds.forEach(function (x) { before[x.id] = 1; });
-    if (!native.wakeSpotify || !native.wakeSpotify()) return null;
-    toast('Starting Spotify on this TV...');
-    return wait(15);
-  }).catch(function () { return null; });
-}
 function firstDevice() {
   return apiJson('/me/player/devices').then(function (j) {
     var ds = ((j && j.devices) || []).filter(function (d) { return !d.is_restricted; });
@@ -577,16 +518,7 @@ function control(action) {
   if (!token && !link) { connectSpotify(); return Promise.resolve(false); }
   var map = { play: ['PUT', '/me/player/play'], pause: ['PUT', '/me/player/pause'], next: ['POST', '/me/player/next'], prev: ['POST', '/me/player/previous'] };
   var m = map[action];
-  // resuming on the TV: bring the music here if it is playing (or stuck) somewhere else
-  var send = action === 'play' && native
-    ? tvDevice().then(function (tv) {
-      expectSpotify();
-      return tv && tv.id !== np.deviceId
-        ? api('/me/player', { method: 'PUT', body: { device_ids: [tv.id], play: true } })
-        : api(m[1], { method: m[0] });
-    })
-    : api(m[1], { method: m[0] });
-  return send.then(function (r) {
+  return api(m[1], { method: m[0] }).then(function (r) {
     if (r.status === 404) { toast('No active Spotify device. Start playing on your phone or TV first.'); return false; }
     if (!checkPlayResponse(r)) return false;
     if (action === 'play' || action === 'pause') {
@@ -604,10 +536,7 @@ function togglePlay() { return control(np.playing ? 'pause' : 'play'); }
 function startPlayback(body, label) {
   if (DEMO && !token) { toast('Demo mode: connect Spotify to play your music.'); return Promise.resolve(false); }
   if (!token) { openDrawer('connect'); return Promise.resolve(false); }
-  return tvDevice().then(function (tv) {
-    expectSpotify();
-    return api('/me/player/play' + (tv ? '?device_id=' + encodeURIComponent(tv.id) : ''), { method: 'PUT', body: body });
-  }).then(function (r) {
+  return api('/me/player/play', { method: 'PUT', body: body }).then(function (r) {
     if (r.status !== 404) return checkPlayResponse(r);
     return firstDevice().then(function (dev) {
       if (!dev) { toast('Open Spotify on your phone, PC or TV first, then pick again.'); return false; }
