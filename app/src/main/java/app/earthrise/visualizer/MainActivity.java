@@ -4,11 +4,13 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.media.AudioManager;
 import android.media.audiofx.Visualizer;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.View;
@@ -151,8 +153,9 @@ public class MainActivity extends Activity {
         }
 
         /**
-         * Opens the TV's Spotify app for a moment so it joins Spotify Connect (asleep, it is not a
-         * device the page can play on), then brings Earthrise back. False when it is not installed.
+         * Opens the TV's Spotify app so it joins Spotify Connect (asleep, it is not a device the page
+         * can play on; it only joins while on screen). Earthrise comes back as soon as music plays,
+         * or after 20 s. False when Spotify is not installed.
          */
         @JavascriptInterface
         public boolean wakeSpotify() {
@@ -173,10 +176,8 @@ public class MainActivity extends Activity {
                     Log.w(TAG, "could not open Spotify: " + e);
                     return;
                 }
-                main.postDelayed(() -> startActivity(new android.content.Intent(MainActivity.this, MainActivity.class)
-                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
-                                | android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-                                | android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION)), 4000);
+                waking = SystemClock.uptimeMillis();
+                main.postDelayed(comeBack, 1500);
             });
             return true;
         }
@@ -193,6 +194,28 @@ public class MainActivity extends Activity {
             });
         }
     }
+
+    /** When Spotify was opened by wakeSpotify: the time, so Earthrise can come back once it plays. */
+    private long waking;
+
+    private final Runnable comeBack = new Runnable() {
+        @Override
+        public void run() {
+            if (waking == 0) return;
+            if (web != null) web.resumeTimers(); // the page must keep going to tell Spotify what to play
+            AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+            boolean playing = am != null && am.isMusicActive();
+            if (!playing && SystemClock.uptimeMillis() - waking < 20000) {
+                main.postDelayed(this, 500);
+                return;
+            }
+            waking = 0;
+            startActivity(new android.content.Intent(MainActivity.this, MainActivity.class)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                            | android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                            | android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION));
+        }
+    };
 
     private void answer(String id, String json) {
         final String code = "window.onLinkResult&&onLinkResult(" + org.json.JSONObject.quote(id == null ? "" : id) + "," + json + ")";
@@ -344,7 +367,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         stopAudio();
-        if (web != null) web.onPause();
+        if (web != null) {
+            web.onPause();
+            // Fire OS's WebView would otherwise stop the page's JavaScript behind Spotify (wakeSpotify)
+            web.resumeTimers();
+        }
         super.onPause();
     }
 

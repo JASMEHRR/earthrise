@@ -505,26 +505,40 @@ function checkPlayResponse(r) {
   return true;
 }
 /* On the TV, music goes to the TV's own Spotify app, not to whatever Spotify last used (a web
-   player left open in Chrome took the songs and played nothing). When that app is asleep it is not
-   listed, so Earthrise opens it for a moment (EarthriseNative.wakeSpotify) and comes back. */
+   player left open in Chrome took the songs and played nothing). The TV's browser engine has no
+   Widevine, so Earthrise cannot play Spotify itself. When that app is asleep it is not listed, so
+   Earthrise opens it (EarthriseNative.wakeSpotify); the device that appears then is this TV, and it
+   is remembered. Earthrise comes back to the front as soon as the music starts. */
 function isTvDevice(d) { return !!d && !d.is_restricted && (/fire ?tv|aft[a-z]/i.test(d.name || '') || /^tv$/i.test(d.type || '')); }
 function pickTv(ds) {
-  ds = (ds || []).filter(isTvDevice);
-  return ds.filter(function (d) { return /fire ?tv|aft[a-z]/i.test(d.name || ''); })[0] || ds[0] || null;
+  ds = (ds || []).filter(function (d) { return !d.is_restricted; });
+  var mine = '';
+  try { mine = localStorage.getItem('er.tvDevice') || ''; } catch (e) { mine = ''; }
+  var tv = ds.filter(function (d) { return mine && d.name === mine; })[0] ||
+    ds.filter(function (d) { return isTvDevice(d) && /fire ?tv|aft[a-z]/i.test(d.name || ''); })[0] ||
+    ds.filter(isTvDevice)[0] || null;
+  return tv;
 }
+function rememberTv(d) { try { if (d) localStorage.setItem('er.tvDevice', d.name); } catch (e) { /* only a shortcut */ } }
 function listDevices() { return apiJson('/me/player/devices').then(function (j) { return (j && j.devices) || []; }); }
 function tvDevice() {
   if (!native) return Promise.resolve(null);
+  var before = {};
   var wait = function (n) {
-    return new Promise(function (res) { setTimeout(res, 1500); }).then(listDevices).then(function (ds) {
-      return pickTv(ds) || (n > 0 ? wait(n - 1) : null);
+    return new Promise(function (res) { setTimeout(res, 1000); }).then(listDevices).then(function (ds) {
+      // the one that just appeared is Spotify on this TV, whatever it is called
+      var d = pickTv(ds) || ds.filter(function (x) { return !x.is_restricted && !before[x.id]; })[0];
+      if (d) { rememberTv(d); return d; }
+      return n > 0 ? wait(n - 1) : null;
     });
   };
   return listDevices().then(function (ds) {
     var d = pickTv(ds);
-    if (d || !native.wakeSpotify || !native.wakeSpotify()) return d;
-    toast('Waking Spotify on this TV...');
-    return wait(9);
+    if (d) { rememberTv(d); return d; }
+    ds.forEach(function (x) { before[x.id] = 1; });
+    if (!native.wakeSpotify || !native.wakeSpotify()) return null;
+    toast('Starting Spotify on this TV...');
+    return wait(15);
   }).catch(function () { return null; });
 }
 function firstDevice() {
