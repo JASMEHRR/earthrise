@@ -41,6 +41,16 @@ public class MainActivity extends Activity {
     private boolean wantAudio = false;
     private boolean askedPermission = false;
     private long lastPush = 0;
+    /** Words from Jarvis in Glass Home ("play X on Spotify"), kept until the page asks for them. */
+    private volatile String pendingPlay = null;
+    static final String EXTRA_PLAY = "play";
+
+    private void takeIntent(android.content.Intent i) {
+        String q = i == null ? null : i.getStringExtra(EXTRA_PLAY);
+        if (q == null || q.trim().isEmpty() || q.length() > 200) return;
+        pendingPlay = q.trim();
+        if (web != null) js("window.onNativePlay&&onNativePlay(" + org.json.JSONObject.quote(pendingPlay) + ")");
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -86,6 +96,8 @@ public class MainActivity extends Activity {
 
         if (savedInstanceState != null) web.restoreState(savedInstanceState);
         else web.loadUrl(BASE);
+        String first = getIntent() == null ? null : getIntent().getStringExtra(EXTRA_PLAY);
+        if (first != null && !first.trim().isEmpty() && first.length() <= 200) pendingPlay = first.trim(); // the page asks with takePlay()
         web.requestFocus();
     }
 
@@ -110,6 +122,14 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public String getClientId() {
             return BuildConfig.SPOTIFY_CLIENT_ID;
+        }
+
+        /** What Jarvis asked to play when it opened Earthrise (once). */
+        @JavascriptInterface
+        public String takePlay() {
+            String q = pendingPlay;
+            pendingPlay = null;
+            return q == null ? "" : q;
         }
 
         @JavascriptInterface
@@ -273,6 +293,13 @@ public class MainActivity extends Activity {
         web.evaluateJavascript("window.handleBack?String(window.handleBack()):'false'", result -> {
             if (!"\"true\"".equals(result)) finish();
         });
+    }
+
+    @Override
+    protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        takeIntent(intent);
     }
 
     @Override

@@ -179,7 +179,7 @@ var rand = function (a, b) { return a + Math.random() * (b - a); };
 var native = window.EarthriseNative || null;
 var REDIRECT = native ? 'earthrise://callback' : location.origin + location.pathname;
 var SCOPES = 'user-read-currently-playing user-read-playback-state user-modify-playback-state ' +
-  'user-read-recently-played playlist-read-private user-library-read';
+  'user-read-recently-played playlist-read-private playlist-read-collaborative user-library-read';
 var LIBRARY_SCOPES = ['user-read-recently-played', 'playlist-read-private', 'user-library-read'];
 var API = 'https://api.spotify.com/v1';
 var BPM = 118;
@@ -508,6 +508,28 @@ function startPlayback(body, label) {
     return ok;
   }).catch(function () { toast('Could not reach Spotify.'); return false; });
 }
+/** Plays what was asked for (from Jarvis in Glass Home): one of your playlists by name, else the best matching song. */
+function playSearch(q) {
+  q = String(q || '').trim();
+  if (!q) return;
+  if (!connected()) { openDrawer('connect'); toast('Connect Spotify first, then ask again.'); return; }
+  var wantList = /\bplaylist\b/i.test(q), words = q.replace(/\b(my|the|playlist)\b/gi, ' ').replace(/\s+/g, ' ').trim();
+  toast('Finding ' + q + '...');
+  loadLibrary('playlists').catch(function () { return []; }).then(function (lists) {
+    var low = words.toLowerCase();
+    var mine = (lists || []).filter(function (p) { return p.title.toLowerCase() === low; })[0]
+      || (wantList ? (lists || []).filter(function (p) { return p.title.toLowerCase().indexOf(low) >= 0; })[0] : null);
+    if (mine) return LIB.playlists.pick(mine);
+    var type = wantList ? 'playlist' : 'track';
+    return apiJson('/search?limit=1&type=' + type + '&q=' + encodeURIComponent(words)).then(function (j) {
+      var hit = j && j[type + 's'] && j[type + 's'].items && j[type + 's'].items.filter(Boolean)[0];
+      if (!hit) { toast('Nothing on Spotify for ' + q + '.'); return; }
+      if (type === 'playlist') return startPlayback({ context_uri: hit.uri }, hit.name);
+      return startPlayback({ uris: [hit.uri] }, hit.name + ' · ' + artistsOf(hit));
+    });
+  }).catch(function () { toast('Could not reach Spotify.'); });
+}
+window.onNativePlay = playSearch;
 function playQueueFrom(index) {
   // index is 1-based into the queue (0 is the current song)
   if (index <= 0) return togglePlay();
@@ -989,37 +1011,59 @@ function tickVideo() {
 
 /* ---------- song wheel (bottom-left) ---------- */
 var wheel = { open: false, cursor: 0, lastInput: 0, dragY: null, dragged: false };
+var WHEEL_LISTS = ['queue', 'playlists', 'liked', 'recent'];
+function wheelList() { return WHEEL_LISTS[wheel.list || 0]; }
 function wheelItems() {
+  var key = wheelList();
+  if (key !== 'queue') return (library[key] && library[key].items) || [];
   var items = [];
   if (np.item) items.push(np.item);
   return items.concat(queue);
 }
+/** Left / Right on the open wheel: the next list (Up next, playlists, liked songs, recently played). */
+function switchWheel(d) {
+  wheel.list = ((wheel.list || 0) + d + WHEEL_LISTS.length) % WHEEL_LISTS.length;
+  wheel.cursor = 0; rowsSig = ''; touchWheel();
+  var key = wheelList();
+  buildRows(); focusCursorRow();
+  if (key !== 'queue' && (!library[key] || Date.now() - library[key].at > 60000)) {
+    wheelTitle('Loading ' + LIB[key].title.toLowerCase() + '...');
+    loadLibrary(key).then(function () { if (wheelList() === key) { rowsSig = ''; buildRows(); focusCursorRow(); } })
+      .catch(function () { if (wheelList() === key) wheelTitle('Could not load ' + LIB[key].title.toLowerCase()); });
+  }
+}
+function wheelTitle(text) {
+  var key = wheelList();
+  $('wheelList').textContent = text || ('\u2039  ' + (key === 'queue' ? 'Up next' : LIB[key].title) + '  \u203a');
+}
 function buildRows() {
-  var items = wheelItems();
-  var sig = items.map(function (x) { return x.id; }).join('|');
+  var items = wheelItems(), isQueue = wheelList() === 'queue';
+  var sig = wheelList() + ':' + items.map(function (x) { return x.id; }).join('|');
   if (sig === rowsSig) { markRows(); return; }
   rowsSig = sig; rowsEl.innerHTML = '';
   items.forEach(function (x, pos) {
     var b = document.createElement('button');
-    b.type = 'button'; b.className = 'song' + (pos === 0 ? ' active' : ''); b.dataset.pos = String(pos); b.tabIndex = -1;
+    b.type = 'button'; b.className = 'song' + (isQueue && pos === 0 ? ' active' : ''); b.dataset.pos = String(pos); b.tabIndex = -1;
     var pic;
     if (x.thumb) { pic = document.createElement('img'); pic.src = x.thumb; pic.alt = ''; } else { pic = document.createElement('span'); pic.className = 'ph'; }
     var meta = document.createElement('span'); meta.className = 'meta';
     var t = document.createElement('b'); t.textContent = x.title;
-    var a = document.createElement('small'); a.textContent = pos === 0 ? 'Now playing · ' + x.artist : x.artist;
+    var a = document.createElement('small'); a.textContent = isQueue && pos === 0 ? 'Now playing · ' + x.artist : x.artist;
     meta.appendChild(t); meta.appendChild(a);
     var eq = document.createElement('span'); eq.className = 'eq'; eq.setAttribute('aria-hidden', 'true'); eq.innerHTML = '<i></i><i></i><i></i>';
     b.appendChild(pic); b.appendChild(meta); b.appendChild(eq);
-    b.setAttribute('aria-label', pos === 0 ? 'Now playing ' + x.title + '. Press to play or pause.' : 'Play ' + x.title);
+    b.setAttribute('aria-label', isQueue && pos === 0 ? 'Now playing ' + x.title + '. Press to play or pause.' : 'Play ' + x.title);
     b.addEventListener('click', function () { if (!wheel.dragged) selectWheel(pos); });
     rowsEl.appendChild(b);
   });
   wheel.cursor = Math.min(wheel.cursor, Math.max(0, items.length - 1));
   $('wheelLabel').textContent = np.item ? np.item.title : '';
+  wheelTitle();
   layoutWheel(); markRows();
 }
 function markRows() {
-  Array.prototype.forEach.call(rowsEl.children, function (b) { b.classList.toggle('playing', b.dataset.pos === '0' && np.playing); });
+  var isQueue = wheelList() === 'queue';
+  Array.prototype.forEach.call(rowsEl.children, function (b) { b.classList.toggle('playing', isQueue && b.dataset.pos === '0' && np.playing); });
 }
 function layoutWheel() {
   if (!W) return;
@@ -1051,6 +1095,9 @@ function layoutWheel() {
     el.style.pointerEvents = vis ? 'auto' : 'none';
     el.tabIndex = o === 0 ? 0 : -1;
   }
+  var wl = $('wheelList');
+  wl.style.left = (dcx + discD / 2 + 14) + 'px'; wl.style.top = (dcy - 5.4 * rowH * 1.2 - rowH * .2) + 'px';
+  wl.style.fontSize = Math.round(fs * .95) + 'px';
   stage.classList.toggle('wheel-open', wheel.open);
 }
 var wheelTimer = 0;
@@ -1060,12 +1107,13 @@ function touchWheel() {
   wheelTimer = setTimeout(function () { if (wheel.open && performance.now() - wheel.lastInput > 7900) closeWheel(); }, 8000);
 }
 function openWheel() {
-  if (!wheelItems().length) { toast(connected() ? 'Nothing playing yet.' : 'Connect Spotify to see your songs.'); return; }
-  wheel.open = true; wheel.cursor = 0; touchWheel(); layoutWheel(); focusCursorRow();
+  if (!connected()) { toast('Connect Spotify to see your songs.'); return; }
+  if (!wheelItems().length && wheelList() === 'queue') { wheel.list = 1; rowsSig = ''; } // nothing playing: start at your playlists
+  wheel.open = true; wheel.cursor = 0; touchWheel(); switchWheel(0);
   if (token && Date.now() - lastQueueAt > 8000) loadQueue();
 }
 function closeWheel() {
-  wheel.open = false; wheel.cursor = 0; layoutWheel();
+  wheel.open = false; wheel.cursor = 0; wheel.list = 0; rowsSig = ''; buildRows(); // next time it opens on Up next
   if (rowsEl.contains(document.activeElement)) $('wheelBtn').focus({ preventScroll: true });
 }
 function moveWheel(d) {
@@ -1079,7 +1127,9 @@ function selectWheel(pos) {
   touchWheel();
   var el = rowsEl.children[pos];
   if (el) { el.classList.add('chosen'); setTimeout(function () { el.classList.remove('chosen'); }, 500); }
-  playQueueFrom(pos);
+  var key = wheelList(), items = wheelItems();
+  if (key === 'queue') playQueueFrom(pos);
+  else if (items[pos]) LIB[key].pick(items[pos], pos, items);
   setTimeout(closeWheel, 450);
 }
 
@@ -1300,10 +1350,41 @@ function musicItem(title, sub, thumb, onPick) {
   return b;
 }
 function section(title) { var s = el('section', 'msec'); s.appendChild(el('h3', null, title)); var list = el('div', 'mlist'); s.appendChild(list); return { root: s, list: list }; }
-function loadLibrary(key, path, map) {
-  var cached = library[key];
+/* ---------- your Spotify library: used by the Music menu and the song wheel ---------- */
+/** All pages of a Spotify list (it sends 50 at a time), up to maxPages. */
+function apiJsonAll(path, maxPages) {
+  var items = [];
+  function page(p, n) {
+    return apiJson(p).then(function (j) {
+      items = items.concat((j && j.items) || []);
+      var next = j && j.next;
+      if (next && n + 1 < maxPages && next.indexOf(API) === 0) return page(next.slice(API.length), n + 1);
+      return { items: items };
+    });
+  }
+  return page(path, 0);
+}
+var LIB = {
+  playlists: { title: 'Your playlists', load: function () { return apiJsonAll('/me/playlists?limit=50', 10); }, map: function (j) {
+    return (j.items || []).filter(Boolean).map(function (p) {
+      var imgs = p.images || [], total = (p.tracks && p.tracks.total) || (p.items && p.items.total) || 0;
+      return { id: p.id, uri: p.uri, title: p.name, artist: total + ' songs', thumb: imgs.length ? imgs[imgs.length - 1].url : '' };
+    });
+  }, pick: function (x) { return startPlayback({ context_uri: x.uri }, x.title); } },
+  liked: { title: 'Liked songs', load: function () { return apiJson('/me/tracks?limit=50'); }, map: function (j) {
+    return (j.items || []).map(function (x) { return toItem(x.track); });
+  }, pick: function (x, i, all) { return startPlayback({ uris: all.slice(i, i + 100).map(function (y) { return y.uri; }) }, x.title); } },
+  recent: { title: 'Recently played', load: function () { return apiJson('/me/player/recently-played?limit=50'); }, map: function (j) {
+    var seen = {}, out = [];
+    (j.items || []).forEach(function (x) { var t = x.track; if (t && !seen[t.id] && out.length < 30) { seen[t.id] = 1; out.push(toItem(t)); } });
+    return out;
+  }, pick: function (x) { return startPlayback({ uris: [x.uri] }, x.title); } }
+};
+var LIB_ORDER = ['recent', 'playlists', 'liked'];
+function loadLibrary(key) {
+  var cached = library[key], s = LIB[key];
   if (cached && Date.now() - cached.at < 60000) return Promise.resolve(cached.items);
-  return apiJson(path).then(function (j) { var items = map(j); library[key] = { at: Date.now(), items: items }; return items; });
+  return s.load().then(function (j) { var items = s.map(j); library[key] = { at: Date.now(), items: items }; return items; });
 }
 function renderMusic() {
   var body = $('musicBody'); body.innerHTML = '';
@@ -1325,24 +1406,10 @@ function renderMusic() {
     var rc = el('button', 'pbtn', 'Reconnect Spotify'); rc.type = 'button'; rc.addEventListener('click', connect); body.appendChild(rc);
     return;
   }
-  [
-    { key: 'recent', title: 'Recently played', path: '/me/player/recently-played?limit=30', map: function (j) {
-      var seen = {}, out = [];
-      (j.items || []).forEach(function (x) { var t = x.track; if (t && !seen[t.id] && out.length < 15) { seen[t.id] = 1; out.push(toItem(t)); } });
-      return out;
-    }, pick: function (x) { startPlayback({ uris: [x.uri] }, x.title); } },
-    { key: 'playlists', title: 'Your playlists', path: '/me/playlists?limit=30', map: function (j) {
-      return (j.items || []).filter(Boolean).map(function (p) {
-        var imgs = p.images || [], total = (p.tracks && p.tracks.total) || (p.items && p.items.total) || 0;
-        return { id: p.id, uri: p.uri, title: p.name, artist: total + ' songs', thumb: imgs.length ? imgs[imgs.length - 1].url : '' };
-      });
-    }, pick: function (x) { startPlayback({ context_uri: x.uri }, x.title); } },
-    { key: 'liked', title: 'Liked songs', path: '/me/tracks?limit=30', map: function (j) {
-      return (j.items || []).map(function (x) { return toItem(x.track); });
-    }, pick: function (x, i, all) { startPlayback({ uris: all.slice(i).map(function (y) { return y.uri; }) }, x.title); } }
-  ].forEach(function (s) {
+  LIB_ORDER.forEach(function (key) {
+    var s = LIB[key];
     var sec = section(s.title); sec.list.appendChild(el('p', 'small', 'Loading...')); body.appendChild(sec.root);
-    loadLibrary(s.key, s.path, s.map).then(function (items) {
+    loadLibrary(key).then(function (items) {
       sec.list.innerHTML = '';
       if (!items.length) sec.list.appendChild(el('p', 'small', 'Nothing here yet.'));
       items.forEach(function (x, i) { sec.list.appendChild(musicItem(x.title, x.artist, x.thumb, function () { s.pick(x, i, items); })); });
@@ -1616,7 +1683,8 @@ document.addEventListener('keydown', function (e) {
     if (k === 'ArrowUp') { e.preventDefault(); moveWheel(-1); return; }
     if (k === 'ArrowDown') { e.preventDefault(); moveWheel(1); return; }
     if (k === 'Enter' || k === ' ') { e.preventDefault(); selectWheel(wheel.cursor); return; }
-    if (k === 'Escape' || k === 'ArrowRight' || k === 'ArrowLeft') { e.preventDefault(); closeWheel(); showControls(); return; }
+    if (k === 'ArrowRight' || k === 'ArrowLeft') { e.preventDefault(); switchWheel(k === 'ArrowRight' ? 1 : -1); return; }
+    if (k === 'Escape') { e.preventDefault(); closeWheel(); showControls(); return; }
     return;
   }
   var wasHidden = !stage.classList.contains('show-controls');
@@ -1729,6 +1797,8 @@ applyLiveAudio();
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { lyricKey = ''; });
 handleCallback().then(function () {
   ui(); if (token || link) poll();
+  var asked = native && native.takePlay ? String(native.takePlay() || '') : ''; // opened by Jarvis with something to play
+  if (asked) setTimeout(function () { playSearch(asked); }, 800);
   if (connected()) hideControls(); else showControls();
   if (!connected() && !clientId()) openDrawer('connect');
 });
