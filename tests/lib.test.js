@@ -148,3 +148,33 @@ test('rankVideos drops Shorts and prefers the official video of the right length
   assert.deepStrictEqual(rankVideos(['abcdefghijk'], null, 200000, 'x'), ['abcdefghijk']);
   assert.deepStrictEqual(rankVideos([], details, 1, ''), []);
 });
+
+test('parseRequest understands what Jarvis asks for', () => {
+  const { parseRequest } = require('../web/app.js');
+  const k = (q) => { const r = parseRequest(q); return [r.kind, r.text, r.from, r.by, r.shuffle].join('|'); };
+  assert.strictEqual(k('Kesariya'), 'any|Kesariya|||false');
+  assert.strictEqual(k('play Kesariya on Spotify'), 'any|Kesariya|||false');
+  assert.strictEqual(k('Lover by Diljit Dosanjh'), 'track|Lover||Diljit Dosanjh|false');
+  assert.strictEqual(k('my road trip playlist'), 'playlist|road trip|||false');
+  assert.strictEqual(k('Kesariya from my road trip playlist'), 'inPlaylist|Kesariya|road trip||false');
+  assert.strictEqual(k('my liked songs'), 'liked||||false');
+  assert.strictEqual(k('shuffle my liked songs'), 'liked||||true');
+  assert.strictEqual(k('Tum Hi Ho from liked songs'), 'inLiked|Tum Hi Ho|||false');
+  assert.strictEqual(k('Tum Hi Ho from my favourites'), 'inLiked|Tum Hi Ho|||false');
+  assert.strictEqual(k('album Brahmastra'), 'album|Brahmastra|||false');
+  assert.strictEqual(k('songs by Arijit Singh'), 'artist|Arijit Singh|||false');
+  assert.strictEqual(k('shuffle my gym playlist'), 'playlist|gym|||true');
+  assert.strictEqual(k('search Arijit'), 'search|Arijit|||false');
+  assert.strictEqual(k('find songs like Kesariya'), 'search|songs like Kesariya|||false');
+});
+
+test('bestMatch prefers exact, then starts-with, then contains', () => {
+  const { bestMatch } = require('../web/app.js');
+  const items = [{ title: 'Road Trip Vibes' }, { title: 'Road trip' }, { title: 'Old road trip 2019' }, { title: 'Gym' }];
+  assert.strictEqual(bestMatch(items, 'road trip').title, 'Road trip');
+  assert.strictEqual(bestMatch(items, 'road trip v').title, 'Road Trip Vibes');
+  assert.strictEqual(bestMatch(items, '2019').title, 'Old road trip 2019');
+  assert.strictEqual(bestMatch(items, 'nothing like it'), null);
+  assert.strictEqual(bestMatch([], 'x'), null);
+  assert.strictEqual(bestMatch(items, ''), null);
+});

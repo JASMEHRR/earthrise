@@ -165,7 +165,47 @@ function largestImage(images) {
   return best ? best.url : '';
 }
 
-var Lib = { parseLrc: parseLrc, lineIndexAt: lineIndexAt, layoutLine: layoutLine, vibrantColor: vibrantColor,
+/* What a spoken request (Jarvis: "play X on Spotify") asks for. Examples:
+   "Kesariya" (a song, or your playlist with that exact name), "Lover by Diljit Dosanjh", "my road trip playlist",
+   "Kesariya from my road trip playlist", "my liked songs", "Tum Hi Ho from liked songs", "album Brahmastra",
+   "songs by Arijit Singh", "shuffle my liked songs", "search Arijit". */
+var LIKED_RE = /^(?:my\s+|the\s+)?(?:liked|likes|favou?rites?|saved)(?:\s+(?:songs|tracks|music))?$/i;
+function parseRequest(q) {
+  var s = String(q || '').trim().replace(/[.!?]+$/, '').replace(/\s+on\s+spotify$/i, '')
+    .replace(/^(?:please\s+)?(?:play|put\s+on|start)\s+/i, '').replace(/\s+/g, ' ').trim();
+  var out = { kind: 'any', text: s, from: '', by: '', shuffle: false }, m;
+  if (/^shuffle\b/i.test(s)) { out.shuffle = true; s = out.text = s.replace(/^shuffle\s*/i, ''); }
+  if ((m = /^(?:search(?:\s+for)?|find|look\s+for|show(?:\s+me)?)\s+(.+)$/i.exec(s))) { out.kind = 'search'; out.text = m[1]; return out; }
+  if (!s || LIKED_RE.test(s)) { out.kind = 'liked'; out.text = ''; return out; }
+  if ((m = /^(.+?)\s+from\s+(.+)$/i.exec(s))) {
+    var where = m[2].replace(/^(?:my|the)\s+/i, '').replace(/\s+playlist$/i, '').trim();
+    out.text = m[1];
+    if (LIKED_RE.test(m[2]) || LIKED_RE.test(where)) { out.kind = 'inLiked'; return out; }
+    out.kind = 'inPlaylist'; out.from = where; return out;
+  }
+  if ((m = /^(?:the\s+)?album\s+(.+)$/i.exec(s))) { out.kind = 'album'; out.text = m[1]; return out; }
+  if ((m = /^(?:songs|music|tracks)\s+(?:by|of)\s+(.+)$|^(?:the\s+)?artist\s+(.+)$/i.exec(s))) { out.kind = 'artist'; out.text = m[1] || m[2]; return out; }
+  if ((m = /^(?:my\s+|the\s+)?(.+?)\s+playlist$|^playlist\s+(.+)$/i.exec(s))) { out.kind = 'playlist'; out.text = m[1] || m[2]; return out; }
+  if ((m = /^(.+?)\s+by\s+(.+)$/i.exec(s))) { out.kind = 'track'; out.text = m[1]; out.by = m[2]; return out; }
+  return out;
+}
+/* The item whose title best matches spoken words: exact, then starts with, then contains (letters only, any case). */
+function bestMatch(items, text) {
+  var want = norm(String(text || '')), best = null, bestScore = 0;
+  if (!want) return null;
+  (items || []).forEach(function (x) {
+    var t = norm(String((x && x.title) || '')), sc = 0;
+    if (!t) return;
+    if (t === want) sc = 4;
+    else if (t.indexOf(want) === 0) sc = 3;
+    else if (t.indexOf(want) >= 0) sc = 2;
+    else if (want.indexOf(t) >= 0 && t.length >= 3) sc = 1;
+    if (sc > bestScore) { best = x; bestScore = sc; }
+  });
+  return best;
+}
+
+var Lib = { parseLrc: parseLrc, parseRequest: parseRequest, bestMatch: bestMatch, lineIndexAt: lineIndexAt, layoutLine: layoutLine, vibrantColor: vibrantColor,
   textStyleFor: textStyleFor, TEXT_STYLES: TEXT_STYLES,
   isVideoId: isVideoId, videoIdsFrom: videoIdsFrom, quotaResetAt: quotaResetAt, largestImage: largestImage,
   isoDurationMs: isoDurationMs, rankVideos: rankVideos };
@@ -513,21 +553,63 @@ function playSearch(q) {
   q = String(q || '').trim();
   if (!q) return;
   if (!connected()) { openDrawer('connect'); toast('Connect Spotify first, then ask again.'); return; }
-  var wantList = /\bplaylist\b/i.test(q), words = q.replace(/\b(my|the|playlist)\b/gi, ' ').replace(/\s+/g, ' ').trim();
+  var r = parseRequest(q);
+  if (r.kind === 'search') { runSearch(r.text); return; }
   toast('Finding ' + q + '...');
-  loadLibrary('playlists').catch(function () { return []; }).then(function (lists) {
-    var low = words.toLowerCase();
-    var mine = (lists || []).filter(function (p) { return p.title.toLowerCase() === low; })[0]
-      || (wantList ? (lists || []).filter(function (p) { return p.title.toLowerCase().indexOf(low) >= 0; })[0] : null);
-    if (mine) return LIB.playlists.pick(mine);
-    var type = wantList ? 'playlist' : 'track';
-    return apiJson('/search?limit=1&type=' + type + '&q=' + encodeURIComponent(words)).then(function (j) {
-      var hit = j && j[type + 's'] && j[type + 's'].items && j[type + 's'].items.filter(Boolean)[0];
-      if (!hit) { toast('Nothing on Spotify for ' + q + '.'); return; }
-      if (type === 'playlist') return startPlayback({ context_uri: hit.uri }, hit.name);
-      return startPlayback({ uris: [hit.uri] }, hit.name + ' · ' + artistsOf(hit));
+  var nothing = function () { toast('Nothing on Spotify for ' + q + '.'); };
+  var myLists = function () { return loadLibrary('playlists').catch(function () { return []; }); };
+  var first = function (type, text) {
+    return apiJson('/search?limit=5&type=' + type + '&q=' + encodeURIComponent(text)).then(function (j) {
+      return ((j && j[type + 's'] && j[type + 's'].items) || []).filter(Boolean);
     });
-  }).catch(function () { toast('Could not reach Spotify.'); });
+  };
+  var job;
+  if (r.kind === 'liked' || r.kind === 'inLiked') {
+    job = likedSongs().then(function (all) {
+      if (!all.length) { toast('You have no liked songs yet.'); return; }
+      if (r.kind === 'liked') return playThen({ uris: pickUris(all, 0, r.shuffle) }, 'your liked songs', r.shuffle);
+      var hit = bestMatch(all, r.text);
+      if (!hit) { toast('Could not find ' + r.text + ' in your liked songs.'); return; }
+      return playThen({ uris: pickUris(all, all.indexOf(hit)) }, hit.title);
+    });
+  } else if (r.kind === 'inPlaylist') {
+    job = myLists().then(function (lists) {
+      var pl = bestMatch(lists, r.from);
+      if (!pl) { toast('No playlist called ' + r.from + '.'); return; }
+      return playlistSongs(pl.id).then(function (songs) {
+        var hit = bestMatch(songs, r.text);
+        if (!hit) { toast('Could not find ' + r.text + ' in ' + pl.title + '.'); return; }
+        return playPlaylist(pl, hit.uri, r.shuffle);
+      });
+    });
+  } else if (r.kind === 'playlist' || r.kind === 'any') {
+    // your own playlist first (by name), then Spotify: a public playlist when one was asked for, else a song
+    job = myLists().then(function (lists) {
+      var pl = r.kind === 'playlist' ? bestMatch(lists, r.text) : (lists || []).filter(function (p) { return norm(p.title) === norm(r.text); })[0];
+      if (pl) return playPlaylist(pl, '', r.shuffle);
+      var type = r.kind === 'playlist' ? 'playlist' : 'track';
+      return first(type, r.text).then(function (hits) {
+        if (!hits.length) return nothing();
+        if (type === 'playlist') return playThen({ context_uri: hits[0].uri }, hits[0].name, r.shuffle);
+        return playThen({ uris: [hits[0].uri] }, hits[0].name + ' · ' + artistsOf(hits[0]));
+      });
+    });
+  } else if (r.kind === 'album' || r.kind === 'artist') {
+    job = first(r.kind, r.text).then(function (hits) {
+      if (!hits.length) return nothing();
+      return playThen({ context_uri: hits[0].uri }, hits[0].name, r.shuffle);
+    });
+  } else { // "song by artist": prefer a result by that artist; "Stand by Me" still works through the whole-phrase search
+    job = first('track', r.text + ' ' + r.by).then(function (hits) {
+      var by = norm(r.by), hit = hits.filter(function (t) { return norm(artistsOf(t)).indexOf(by) >= 0; })[0];
+      if (hit) return hit;
+      return first('track', r.text + ' by ' + r.by).then(function (h2) { return h2[0] || hits[0] || null; });
+    }).then(function (hit) {
+      if (!hit) return nothing();
+      return playThen({ uris: [hit.uri] }, hit.name + ' · ' + artistsOf(hit));
+    });
+  }
+  job.catch(function () { toast('Could not reach Spotify.'); });
 }
 window.onNativePlay = playSearch;
 function playQueueFrom(index) {
@@ -1147,6 +1229,7 @@ window.onNativeKey = function (name) {
   else if (name === 'menu') { if (drawerOpen()) closeDrawer(); else openDrawer('settings'); }
 };
 window.handleBack = function () {
+  if (drawerOpen() && drawerTab === 'music' && musicView) { closeMusicView(); return true; }
   if (drawerOpen()) { closeDrawer(); return true; }
   if (wheel.open) { closeWheel(); return true; }
   if (stage.classList.contains('show-controls')) { hideControls(); return true; }
@@ -1312,6 +1395,7 @@ function openDrawer(tab) {
   setTimeout(function () { var t = document.querySelector('.tab[data-tab="' + drawerTab + '"]'); if (t) t.focus({ preventScroll: true }); }, 60);
 }
 function closeDrawer() {
+  musicView = null;
   $('drawer').classList.remove('open'); stage.classList.remove('drawer-open');
   showControls(); var b = $('btnMusic'); if (b && b.getClientRects().length) b.focus({ preventScroll: true });
 }
@@ -1368,7 +1452,7 @@ var LIB = {
   playlists: { title: 'Your playlists', load: function () { return apiJsonAll('/me/playlists?limit=50', 10); }, map: function (j) {
     return (j.items || []).filter(Boolean).map(function (p) {
       var imgs = p.images || [], total = (p.tracks && p.tracks.total) || (p.items && p.items.total) || 0;
-      return { id: p.id, uri: p.uri, title: p.name, artist: total + ' songs', thumb: imgs.length ? imgs[imgs.length - 1].url : '' };
+      return { id: p.id, uri: p.uri, title: p.name, artist: total + ' songs', total: total, thumb: imgs.length ? imgs[imgs.length - 1].url : '' };
     });
   }, pick: function (x) { return startPlayback({ context_uri: x.uri }, x.title); } },
   liked: { title: 'Liked songs', load: function () { return apiJson('/me/tracks?limit=50'); }, map: function (j) {
@@ -1386,6 +1470,141 @@ function loadLibrary(key) {
   if (cached && Date.now() - cached.at < 60000) return Promise.resolve(cached.items);
   return s.load().then(function (j) { var items = s.map(j); library[key] = { at: Date.now(), items: items }; return items; });
 }
+/* Songs in one of your playlists, all of them (50 per call, up to 1,000). Spotify's newer API calls the list
+   "items" (each entry's song in .item); older responses use "tracks" (.track), so both are read. */
+function playlistSongs(id) {
+  var key = 'pl:' + id, c = library[key], base = '/playlists/' + encodeURIComponent(id);
+  if (c && Date.now() - c.at < 120000) return Promise.resolve(c.items);
+  return apiJsonAll(base + '/items?limit=50', 20).catch(function () { return apiJsonAll(base + '/tracks?limit=50', 20); }).then(function (j) {
+    var items = (j.items || []).map(function (x) { return x && (x.item || x.track); })
+      .filter(function (t) { return t && t.uri && t.type !== 'episode' && !t.is_local; }).map(toItem);
+    library[key] = { at: Date.now(), items: items };
+    return items;
+  });
+}
+/* Every liked song (50 per call, up to 2,000). onProgress gets the list so far, so a long library shows up as it loads. */
+function likedSongs(onProgress) {
+  var c = library.likedAll;
+  if (c && Date.now() - c.at < 120000) return Promise.resolve(c.items);
+  var items = [];
+  function page(p, n) {
+    return apiJson(p).then(function (j) {
+      (j.items || []).forEach(function (x) { if (x && x.track && x.track.uri && !x.track.is_local) items.push(toItem(x.track)); });
+      if (onProgress) onProgress(items);
+      var next = j && j.next;
+      if (next && n + 1 < 40 && next.indexOf(API) === 0) return page(next.slice(API.length), n + 1);
+      return items;
+    });
+  }
+  return page('/me/tracks?limit=50', 0).then(function (all) { library.likedAll = { at: Date.now(), items: all }; return all; });
+}
+function thumbOf(images) { return images && images.length ? images[images.length - 1].url : ''; }
+/* Spotify search across songs, artists, albums and playlists. */
+function searchSpotify(q, limit) {
+  return apiJson('/search?type=track,artist,album,playlist&limit=' + (limit || 8) + '&q=' + encodeURIComponent(q)).then(function (j) {
+    function list(k) { return ((j && j[k] && j[k].items) || []).filter(Boolean); }
+    return {
+      tracks: list('tracks').map(toItem),
+      artists: list('artists').map(function (a) { return { uri: a.uri, title: a.name, artist: 'Artist', thumb: thumbOf(a.images) }; }),
+      albums: list('albums').map(function (a) { return { uri: a.uri, title: a.name, artist: 'Album · ' + artistsOf(a), thumb: thumbOf(a.images) }; }),
+      playlists: list('playlists').map(function (p) {
+        return { id: p.id, uri: p.uri, title: p.name, artist: 'Playlist' + (p.owner && p.owner.display_name ? ' · ' + p.owner.display_name : ''), thumb: thumbOf(p.images) };
+      })
+    };
+  });
+}
+/* Up to 100 song links for a play request: in order from a start point, or a random 100 when shuffling. */
+function pickUris(items, from, shuffle) {
+  var list = items.slice();
+  if (shuffle) {
+    for (var i = list.length - 1; i > 0; i--) { var r = Math.floor(Math.random() * (i + 1)), t = list[i]; list[i] = list[r]; list[r] = t; }
+    return list.slice(0, 100).map(function (x) { return x.uri; });
+  }
+  return list.slice(from || 0, (from || 0) + 100).map(function (x) { return x.uri; });
+}
+/* Starts something, then turns Spotify's shuffle on when asked. */
+function playThen(body, label, shuffle) {
+  return startPlayback(body, label).then(function (ok) {
+    if (ok && shuffle) api('/me/player/shuffle?state=true', { method: 'PUT' }).catch(function () { /* shuffle is a nicety */ });
+    return ok;
+  });
+}
+function playPlaylist(p, startUri, shuffle) {
+  var body = { context_uri: p.uri };
+  if (startUri) body.offset = { uri: startUri };
+  else if (shuffle && p.total) body.offset = { position: Math.floor(Math.random() * p.total) };
+  return playThen(body, p.title, shuffle);
+}
+
+/* ---------- Music menu views: a playlist's songs, all liked songs, search results ---------- */
+var musicView = null; // null = the library home; else { kind: 'playlist' | 'liked' | 'search', title, items, shown }
+function openMusicView(v) {
+  musicView = v; v.shown = 100;
+  if (!drawerOpen()) openDrawer('music'); else { drawerTab = 'music'; renderDrawer(); }
+  setTimeout(function () { var b = $('mBack'); if (b) b.focus({ preventScroll: true }); }, 80);
+  var mine = v, done = function () { if (musicView === mine && drawerOpen()) renderDrawer(); };
+  var load = v.kind === 'playlist' ? playlistSongs(v.id)
+    : v.kind === 'liked' ? likedSongs(function (sofar) { mine.items = sofar.slice(); done(); })
+    : searchSpotify(v.q);
+  load.then(function (res) { if (v.kind === 'search') mine.res = res; else mine.items = res; done(); })
+    .catch(function () { mine.error = 'Could not load this from Spotify.'; done(); });
+}
+function closeMusicView() {
+  musicView = null; renderDrawer();
+  setTimeout(function () { var b = $('musicBody').querySelector('button'); if (b) b.focus({ preventScroll: true }); }, 0);
+}
+function runSearch(q) {
+  q = String(q || '').trim();
+  if (!q) return;
+  $('searchQ').value = q;
+  openMusicView({ kind: 'search', q: q, title: 'Results for "' + q + '"' });
+}
+function renderMusicView(body) {
+  var v = musicView, head = el('div', 'mhead');
+  var back = el('button', 'pbtn', 'Back'); back.type = 'button'; back.id = 'mBack';
+  back.addEventListener('click', closeMusicView);
+  head.appendChild(back); head.appendChild(el('h3', null, v.title)); body.appendChild(head);
+  if (v.error) { body.appendChild(el('p', 'small', v.error)); return; }
+  if (v.kind === 'search') {
+    if (!v.res) { body.appendChild(el('p', 'small', 'Searching...')); return; }
+    var groups = [['Songs', v.res.tracks, function (x) { return playThen({ uris: [x.uri] }, x.title + ' · ' + x.artist); }],
+      ['Artists', v.res.artists, function (x) { return playThen({ context_uri: x.uri }, x.title); }],
+      ['Albums', v.res.albums, function (x) { return playThen({ context_uri: x.uri }, x.title); }],
+      ['Playlists', v.res.playlists, function (x) { openMusicView({ kind: 'playlist', id: x.id, uri: x.uri, title: x.title }); }]];
+    var any = false;
+    groups.forEach(function (g) {
+      if (!g[1].length) return;
+      any = true;
+      var sec = section(g[0]); body.appendChild(sec.root);
+      g[1].forEach(function (x) { sec.list.appendChild(musicItem(x.title, x.artist, x.thumb, function () { g[2](x); })); });
+    });
+    if (!any) body.appendChild(el('p', 'small', 'Nothing on Spotify for that. Try other words.'));
+    return;
+  }
+  var acts = el('div', 'inline');
+  var all = el('button', 'pbtn primary', 'Play all'), mix = el('button', 'pbtn', 'Shuffle');
+  all.type = mix.type = 'button';
+  function play(shuffle) {
+    if (v.kind === 'playlist') return playPlaylist({ uri: v.uri, title: v.title, total: v.items ? v.items.length : 0 }, '', shuffle);
+    if (v.items && v.items.length) return playThen({ uris: pickUris(v.items, 0, shuffle) }, 'your liked songs', shuffle);
+  }
+  all.addEventListener('click', function () { play(false); }); mix.addEventListener('click', function () { play(true); });
+  acts.appendChild(all); acts.appendChild(mix); body.appendChild(acts);
+  if (!v.items) { body.appendChild(el('p', 'small', 'Loading...')); return; }
+  if (!v.items.length) { body.appendChild(el('p', 'small', 'No songs here.')); return; }
+  var list = el('div', 'mlist'); body.appendChild(list);
+  v.items.slice(0, v.shown).forEach(function (x, i) {
+    list.appendChild(musicItem(x.title, x.artist, x.thumb, function () {
+      if (v.kind === 'playlist') playPlaylist({ uri: v.uri, title: v.title }, x.uri);
+      else playThen({ uris: pickUris(v.items, i) }, x.title);
+    }));
+  });
+  if (v.items.length > v.shown) {
+    var more = el('button', 'pbtn', 'Show more (' + (v.items.length - v.shown) + ' left)'); more.type = 'button'; more.id = 'mMore';
+    more.addEventListener('click', function () { v.shown += 100; renderDrawer(); });
+    body.appendChild(more);
+  }
+}
 function renderMusic() {
   var body = $('musicBody'); body.innerHTML = '';
   if (!connected()) {
@@ -1394,6 +1613,7 @@ function renderMusic() {
     go.addEventListener('click', function () { drawerTab = 'connect'; renderDrawer(); });
     body.appendChild(go); return;
   }
+  if (musicView) { renderMusicView(body); return; }
   var up = section('Playing and up next');
   wheelItems().slice(0, 12).forEach(function (x, i) {
     up.list.appendChild(musicItem(x.title, (i === 0 ? 'Now playing · ' : '') + x.artist, x.thumb, function () { playQueueFrom(i); }));
@@ -1412,7 +1632,17 @@ function renderMusic() {
     loadLibrary(key).then(function (items) {
       sec.list.innerHTML = '';
       if (!items.length) sec.list.appendChild(el('p', 'small', 'Nothing here yet.'));
-      items.forEach(function (x, i) { sec.list.appendChild(musicItem(x.title, x.artist, x.thumb, function () { s.pick(x, i, items); })); });
+      items.forEach(function (x, i) {
+        // a playlist opens to its songs (pick any, or Play all / Shuffle); other rows play straight away
+        var pick = key === 'playlists' ? function () { openMusicView({ kind: 'playlist', id: x.id, uri: x.uri, title: x.title }); }
+          : function () { s.pick(x, i, items); };
+        sec.list.appendChild(musicItem(x.title, x.artist, x.thumb, pick));
+      });
+      if (key === 'liked' && items.length) {
+        var allLiked = el('button', 'pbtn', 'All liked songs'); allLiked.type = 'button'; allLiked.id = 'mAllLiked';
+        allLiked.addEventListener('click', function () { openMusicView({ kind: 'liked', title: 'Liked songs' }); });
+        sec.list.appendChild(allLiked);
+      }
     }).catch(function () { sec.list.innerHTML = ''; sec.list.appendChild(el('p', 'small', 'Could not load this from Spotify.')); });
   });
 }
@@ -1675,7 +1905,7 @@ document.addEventListener('keydown', function (e) {
   if (k === 'MediaTrackPrevious') { e.preventDefault(); control('prev'); return; }
   if (drawerOpen()) {
     showControls();
-    if (k === 'Escape') { e.preventDefault(); closeDrawer(); return; }
+    if (k === 'Escape') { e.preventDefault(); if (drawerTab === 'music' && musicView) closeMusicView(); else closeDrawer(); return; }
     if (arrow && !(typing && (k === 'ArrowLeft' || k === 'ArrowRight'))) { e.preventDefault(); spatial(k); }
     return;
   }
@@ -1734,6 +1964,7 @@ function connectSpotify() {
   if (clientId()) connect(); else openDrawer('connect');
 }
 $('btnConnect').addEventListener('click', connectSpotify);
+$('searchForm').addEventListener('submit', function (e) { e.preventDefault(); runSearch($('searchQ').value); });
 $('btnMusic').addEventListener('click', function () { if (drawerOpen() && drawerTab === 'music') closeDrawer(); else openDrawer('music'); });
 $('btnSettings').addEventListener('click', function () { if (drawerOpen() && drawerTab === 'settings') closeDrawer(); else openDrawer('settings'); });
 $('drawerClose').addEventListener('click', closeDrawer);

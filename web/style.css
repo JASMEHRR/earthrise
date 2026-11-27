@@ -239,3 +239,11 @@ input[type="text"]:focus { box-shadow: 0 0 0 3px var(--focus); }
   .ctl.wide { font-size: 15px; padding: 0 16px; }
   .stage.drawer-open .controls { display: none; }
 }
+
+/* Music menu: search box above the list, and the Back bar of playlist, liked-songs and search views */
+.msearch { margin: 0 0 16px; }
+.mhead { display: flex; align-items: center; margin: 0 0 12px; }
+.mhead h3 { margin: 0 0 0 12px; font-size: 16px; font-weight: 700; color: var(--fg); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pane .inline .pbtn + .pbtn { margin-left: 8px; }
+#mMore, #mAllLiked { margin-top: 8px; align-self: flex-start; }
+.mhead + .inline { margin: 0 0 14px; }
