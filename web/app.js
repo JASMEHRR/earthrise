@@ -508,7 +508,7 @@ function checkPlayResponse(r) {
    player left open in Chrome took the songs and played nothing). The TV's browser engine has no
    Widevine, so Earthrise cannot play Spotify itself. When that app is asleep it is not listed, so
    Earthrise opens it (EarthriseNative.wakeSpotify); the device that appears then is this TV, and it
-   is remembered. Earthrise comes back to the front as soon as the music starts. */
+   is remembered. Earthrise comes back to the front once the song is sent (expectSpotify). */
 function isTvDevice(d) { return !!d && !d.is_restricted && (/fire ?tv|aft[a-z]/i.test(d.name || '') || /^tv$/i.test(d.type || '')); }
 function pickTv(ds) {
   ds = (ds || []).filter(function (d) { return !d.is_restricted; });
@@ -520,6 +520,8 @@ function pickTv(ds) {
   return tv;
 }
 function rememberTv(d) { try { if (d) localStorage.setItem('er.tvDevice', d.name); } catch (e) { /* only a shortcut */ } }
+/* Spotify's TV app pops up on every play command; this sends it back behind Earthrise (it keeps playing). */
+function expectSpotify() { if (native && native.expectSpotify) native.expectSpotify(); }
 function listDevices() { return apiJson('/me/player/devices').then(function (j) { return (j && j.devices) || []; }); }
 function tvDevice() {
   if (!native) return Promise.resolve(null);
@@ -559,6 +561,7 @@ function control(action) {
   // resuming on the TV: bring the music here if it is playing (or stuck) somewhere else
   var send = action === 'play' && native
     ? tvDevice().then(function (tv) {
+      expectSpotify();
       return tv && tv.id !== np.deviceId
         ? api('/me/player', { method: 'PUT', body: { device_ids: [tv.id], play: true } })
         : api(m[1], { method: m[0] });
@@ -583,6 +586,7 @@ function startPlayback(body, label) {
   if (DEMO && !token) { toast('Demo mode: connect Spotify to play your music.'); return Promise.resolve(false); }
   if (!token) { openDrawer('connect'); return Promise.resolve(false); }
   return tvDevice().then(function (tv) {
+    expectSpotify();
     return api('/me/player/play' + (tv ? '?device_id=' + encodeURIComponent(tv.id) : ''), { method: 'PUT', body: body });
   }).then(function (r) {
     if (r.status !== 404) return checkPlayResponse(r);
