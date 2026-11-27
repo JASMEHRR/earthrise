@@ -508,7 +508,7 @@ function checkPlayResponse(r) {
    player left open in Chrome took the songs and played nothing). The TV's browser engine has no
    Widevine, so Earthrise cannot play Spotify itself. When that app is asleep it is not listed, so
    Earthrise opens it (EarthriseNative.wakeSpotify); the device that appears then is this TV, and it
-   is remembered. Earthrise comes back to the front once the song is sent (expectSpotify). */
+   is remembered. Earthrise comes back to the front once the song is really playing (expectSpotify). */
 function isTvDevice(d) { return !!d && !d.is_restricted && (/fire ?tv|aft[a-z]/i.test(d.name || '') || /^tv$/i.test(d.type || '')); }
 function pickTv(ds) {
   ds = (ds || []).filter(function (d) { return !d.is_restricted; });
@@ -520,8 +520,27 @@ function pickTv(ds) {
   return tv;
 }
 function rememberTv(d) { try { if (d) localStorage.setItem('er.tvDevice', d.name); } catch (e) { /* only a shortcut */ } }
-/* Spotify's TV app pops up on every play command; this sends it back behind Earthrise (it keeps playing). */
-function expectSpotify() { if (native && native.expectSpotify) native.expectSpotify(); }
+/* Spotify's TV app pops up on every play command and stops if covered before the song really
+   plays. So: tell Android to expect it, watch Spotify until the song is 2 s in, then come back on
+   top (Spotify keeps playing behind). */
+var watchSpotifyT = 0;
+function expectSpotify() {
+  if (!native || !native.expectSpotify) return;
+  native.expectSpotify();
+  clearTimeout(watchSpotifyT);
+  var until = Date.now() + 30000, start = null; // where the song was when Spotify first said "playing"
+  var check = function () {
+    if (Date.now() > until) return;
+    api('/me/player').then(function (r) { return r.status === 200 ? r.json() : null; }).catch(function () { return null; }).then(function (j) {
+      var at = j && j.is_playing ? (j.progress_ms || 0) : null;
+      if (at !== null && start === null) start = at;
+      if (at !== null && at - start >= 2000) { if (native.spotifyPlaying) native.spotifyPlaying(); return; }
+      if (at === null) start = null;
+      watchSpotifyT = setTimeout(check, 1000);
+    });
+  };
+  watchSpotifyT = setTimeout(check, 1500);
+}
 function listDevices() { return apiJson('/me/player/devices').then(function (j) { return (j && j.devices) || []; }); }
 function tvDevice() {
   if (!native) return Promise.resolve(null);

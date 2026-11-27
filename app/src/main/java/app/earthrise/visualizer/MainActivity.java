@@ -181,18 +181,27 @@ public class MainActivity extends Activity {
         }
 
         /**
-         * Spotify's TV app jumps to the front whenever it is told to play, and closing it (Back)
-         * stops the music. Called just before a play command: if Spotify covers Earthrise in the
-         * next 10 s, Earthrise comes back on top 3 s later and Spotify keeps playing behind it.
+         * Spotify's TV app jumps to the front whenever it is told to play, takes up to ~10 s to start
+         * from cold, and stops if it is covered or closed before the song really plays. Called just
+         * before a play command: the page keeps running behind Spotify (see keepAwake) and calls
+         * spotifyPlaying once Spotify reports the song a couple of seconds in.
          */
         @JavascriptInterface
         public void expectSpotify() {
             main.post(() -> {
-                expectUntil = SystemClock.uptimeMillis() + 10000;
-                if (paused) {
-                    main.removeCallbacks(bringBack);
-                    main.postDelayed(bringBack, 3000);
-                }
+                expectUntil = SystemClock.uptimeMillis() + 30000;
+                if (paused) keepAwake.run();
+            });
+        }
+
+        /** Spotify is really playing: come back on top of it (it keeps playing behind). */
+        @JavascriptInterface
+        public void spotifyPlaying() {
+            main.post(() -> {
+                if (!paused || SystemClock.uptimeMillis() > expectUntil) return;
+                expectUntil = 0;
+                main.removeCallbacks(bringBack);
+                main.postDelayed(bringBack, 800);
             });
         }
 
@@ -212,6 +221,17 @@ public class MainActivity extends Activity {
     /** Until when a Spotify pop-up (after a play command) is sent back behind Earthrise. */
     private long expectUntil;
     private boolean paused;
+
+    /** Behind Spotify, Fire OS's WebView keeps pausing the page; it has to watch Spotify start. */
+    private final Runnable keepAwake = new Runnable() {
+        @Override
+        public void run() {
+            main.removeCallbacks(this);
+            if (!paused || web == null || SystemClock.uptimeMillis() > expectUntil) return;
+            web.resumeTimers();
+            main.postDelayed(this, 1000);
+        }
+    };
 
     private final Runnable bringBack = () -> {
         if (!paused) return;
@@ -366,6 +386,7 @@ public class MainActivity extends Activity {
         paused = false;
         expectUntil = 0;
         main.removeCallbacks(bringBack);
+        main.removeCallbacks(keepAwake);
         hideSystemUi();
         if (web != null) web.onResume();
         if (wantAudio) startAudio();
@@ -375,7 +396,7 @@ public class MainActivity extends Activity {
     protected void onPause() {
         stopAudio();
         paused = true;
-        if (SystemClock.uptimeMillis() < expectUntil) main.postDelayed(bringBack, 3000);
+        main.post(keepAwake);
         if (web != null) {
             web.onPause();
             // Fire OS's WebView would otherwise stop the page's JavaScript behind Spotify (wakeSpotify)
