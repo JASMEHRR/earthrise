@@ -1,7 +1,7 @@
 // Run with: node --test tests
 const test = require('node:test');
 const assert = require('node:assert');
-const { hostAllowed, isLoopback, clientIdFromEnv, sha256 } = require('../link/earthrise-link.js');
+const { hostAllowed, isLoopback, clientIdFromEnv, sha256, missingScopes } = require('../link/earthrise-link.js');
 
 test('hostAllowed accepts IPs and localhost only, so other domains cannot reach the link server', () => {
   assert.strictEqual(hostAllowed('127.0.0.1:5173'), true);
@@ -28,4 +28,11 @@ test('clientIdFromEnv reads a 32-character Client ID line', () => {
 
 test('sha256 is stable hex', () => {
   assert.strictEqual(sha256('abc'), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+});
+
+test('missingScopes spots a login made before collaborative playlists were asked for', () => {
+  const old = 'user-read-currently-playing user-read-playback-state user-modify-playback-state user-read-recently-played playlist-read-private user-library-read';
+  assert.deepStrictEqual(missingScopes(old), ['playlist-read-collaborative']);
+  assert.deepStrictEqual(missingScopes(old + ' playlist-read-collaborative'), []);
+  assert.strictEqual(missingScopes(undefined).length, 7);
 });

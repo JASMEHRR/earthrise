@@ -14,7 +14,7 @@ const PORT = 5173;            // http://127.0.0.1:5173/ is already a registered 
 const DISCOVERY_PORT = 5198;
 const REDIRECT = 'http://127.0.0.1:' + PORT + '/';
 const SCOPES = 'user-read-currently-playing user-read-playback-state user-modify-playback-state ' +
-  'user-read-recently-played playlist-read-private user-library-read';
+  'user-read-recently-played playlist-read-private playlist-read-collaborative user-library-read';
 const WEB_ROOT = path.resolve(__dirname, '..', 'web');
 const DATA_DIR = process.env.APPDATA ? path.join(process.env.APPDATA, 'Earthrise') : path.join(os.homedir(), '.earthrise');
 const DATA_FILE = path.join(DATA_DIR, 'link.json');
@@ -31,6 +31,11 @@ function hostAllowed(host) {
   if (!host) return false;
   const h = host.replace(/:\d+$/, '').replace(/^\[|\]$/g, '').toLowerCase();
   return h === 'localhost' || h === '::1' || /^\d{1,3}(\.\d{1,3}){3}$/.test(h);
+}
+/* Scopes the saved login lacks (a refresh never adds scopes, only a new login does). */
+function missingScopes(granted) {
+  const have = String(granted || '').split(/\s+/);
+  return SCOPES.split(' ').filter(x => have.indexOf(x) < 0);
 }
 function bearer(req) {
   const m = /^Bearer\s+([0-9a-f]{64})$/i.exec(req.headers.authorization || '');
@@ -259,7 +264,7 @@ async function handle(req, res) {
     prunePairs();
     json(res, 200, {
       name: LAPTOP_NAME, addresses: lanAddresses(), port: PORT,
-      spotify: data.spotify && data.spotify.refresh ? { user: data.spotify.user || '' } : null, handedTo: data.handedTo,
+      spotify: data.spotify && data.spotify.refresh ? { user: data.spotify.user || '', outdated: missingScopes(data.spotify.scope).length > 0 } : null, handedTo: data.handedTo,
       pending: [...pairs.entries()].filter(e => e[1].status === 'pending').map(e => ({ pairId: e[0], code: e[1].code, device: e[1].device, from: e[1].from })),
       devices: data.devices.map(d => ({ id: d.id, name: d.name, added: d.added, lastSeen: d.lastSeen || 0 }))
     });
@@ -356,7 +361,8 @@ function btn(text,cls,fn){var b=el('button',cls,text);b.type='button';b.onclick=
 function ago(t){if(!t)return 'not used yet';var s=Math.round((Date.now()-t)/60000);return s<1?'used just now':s<60?'used '+s+' min ago':'used '+new Date(t).toLocaleString([],{dateStyle:'medium',timeStyle:'short'})}
 function load(){return fetch('/link/state',{cache:'no-store'}).then(function(r){return r.json()}).then(function(s){
 var sp=$('sp');sp.innerHTML='';
-if(s.spotify){sp.appendChild(el('span','grow ok','Logged in'+(s.spotify.user?' as '+s.spotify.user:'')+'.'));sp.appendChild(btn('Log out','',function(){post('/link/logout')}))}
+if(s.spotify&&s.spotify.outdated){sp.appendChild(el('span','grow','Logged in'+(s.spotify.user?' as '+s.spotify.user:'')+', but before Earthrise could see collaborative playlists. Log in again so the TV gets all of them.'));var a3=el('a','btn primary','Log in again');a3.href='/link/login';sp.appendChild(a3)}
+else if(s.spotify){sp.appendChild(el('span','grow ok','Logged in'+(s.spotify.user?' as '+s.spotify.user:'')+'.'));sp.appendChild(btn('Log out','',function(){post('/link/logout')}))}
 else if(s.handedTo){sp.appendChild(el('span','grow ok','Login handed to '+s.handedTo.name+'. You can close this window; the TV no longer needs the laptop.'));var a2=el('a','btn','Log in again');a2.href='/link/login';sp.appendChild(a2)}
 else{sp.appendChild(el('span','grow','Not logged in yet.'));var a=el('a','btn primary','Log in with Spotify');a.href='/link/login';sp.appendChild(a)}
 var pe=$('pending');pe.innerHTML='';
@@ -404,4 +410,4 @@ function start() {
 }
 
 if (require.main === module) start();
-module.exports = { hostAllowed, isLoopback, clientIdFromEnv, sha256, lanAddresses };
+module.exports = { hostAllowed, isLoopback, clientIdFromEnv, sha256, lanAddresses, missingScopes };
