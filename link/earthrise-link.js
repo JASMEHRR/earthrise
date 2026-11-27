@@ -52,10 +52,10 @@ function clientIdFromEnv(envText) {
 function loadData() {
   try {
     const d = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-    return { spotify: d.spotify || null, devices: Array.isArray(d.devices) ? d.devices : [] };
+    return { spotify: d.spotify || null, devices: Array.isArray(d.devices) ? d.devices : [], handedTo: d.handedTo || null };
   } catch (e) {
     if (e.code !== 'ENOENT') log('Could not read ' + DATA_FILE + ' (' + e.message + '), starting fresh.');
-    return { spotify: null, devices: [] };
+    return { spotify: null, devices: [], handedTo: null };
   }
 }
 function saveData() {
@@ -73,7 +73,7 @@ function log(msg) {
   console.log('[' + t + '] ' + msg);
 }
 
-let data = { spotify: null, devices: [] };
+let data = { spotify: null, devices: [], handedTo: null };
 let clientId = '';
 let login = null;          // { state, verifier, at } while a Spotify login is in progress
 let refreshing = null;     // the in-flight refresh, so parallel token requests share it
@@ -99,6 +99,7 @@ function keepTokens(j) {
     scope: j.scope || prev.scope || SCOPES,
     user: prev.user || ''
   };
+  data.handedTo = null;
   saveData();
 }
 /* A token with at least 5 minutes left, refreshing when needed. Throws 'login_needed' when the laptop is not logged in. */
@@ -202,10 +203,23 @@ async function handle(req, res) {
   }
   if (p.startsWith('/link/pair/') && req.method === 'GET') {
     prunePairs();
-    const pr = pairs.get(p.slice('/link/pair/'.length));
+    const pid = p.slice('/link/pair/'.length), pr = pairs.get(pid);
     if (!pr) { json(res, 404, { status: 'expired' }); return; }
-    if (pr.status === 'approved') { json(res, 200, { status: 'approved', secret: pr.secret }); pairs.delete(p.slice(11)); return; }
-    json(res, 200, { status: pr.status });
+    if (pr.status !== 'approved') { json(res, 200, { status: pr.status }); return; }
+    // Hand the Spotify login over for good: the TV refreshes it with Spotify itself from now on, so the laptop
+    // app can be closed. The laptop forgets it afterwards, because Spotify may rotate the refresh token on each
+    // refresh and two holders refreshing the same login would log each other out.
+    let t;
+    try { t = await freshToken(); } catch (e) {
+      if (e.code === 'login_needed') { json(res, 409, { status: 'approved', error: 'spotify_login_needed' }); return; }
+      log('Could not refresh before handing over: ' + e.message); json(res, 502, { status: 'approved', error: 'spotify_unreachable' }); return;
+    }
+    json(res, 200, { status: 'approved', secret: pr.secret,
+      spotify: { access_token: t.access, refresh_token: t.refresh, expires_at: t.exp, scope: t.scope, client_id: clientId } });
+    pairs.delete(pid);
+    data.handedTo = { name: pr.device, at: Date.now(), user: (data.spotify && data.spotify.user) || '' };
+    data.spotify = null; saveData();
+    log('Handed the Spotify login to ' + pr.device + '. It no longer needs this laptop, so you can close this window.');
     return;
   }
   if (p === '/link/token' && req.method === 'GET') {
@@ -245,7 +259,7 @@ async function handle(req, res) {
     prunePairs();
     json(res, 200, {
       name: LAPTOP_NAME, addresses: lanAddresses(), port: PORT,
-      spotify: data.spotify && data.spotify.refresh ? { user: data.spotify.user || '' } : null,
+      spotify: data.spotify && data.spotify.refresh ? { user: data.spotify.user || '' } : null, handedTo: data.handedTo,
       pending: [...pairs.entries()].filter(e => e[1].status === 'pending').map(e => ({ pairId: e[0], code: e[1].code, device: e[1].device, from: e[1].from })),
       devices: data.devices.map(d => ({ id: d.id, name: d.name, added: d.added, lastSeen: d.lastSeen || 0 }))
     });
@@ -259,6 +273,7 @@ async function handle(req, res) {
       const pr = pairs.get(String(body.pairId || ''));
       if (!pr || pr.status !== 'pending') { json(res, 404, { error: 'not_pending' }); return; }
       if (p === '/link/deny') { pr.status = 'denied'; log('Denied ' + pr.device + '.'); json(res, 200, { ok: true }); return; }
+      if (!data.spotify || !data.spotify.refresh) { json(res, 409, { error: 'Log in to Spotify on this page first, then press Allow.' }); return; }
       pr.secret = crypto.randomBytes(32).toString('hex');
       pr.status = 'approved';
       data.devices.push({ id: crypto.randomBytes(6).toString('hex'), name: pr.device, secretHash: sha256(pr.secret), added: Date.now(), lastSeen: 0 });
@@ -326,7 +341,7 @@ button.primary,a.btn.primary{background:var(--acc);color:#04121f}button:focus-vi
 .code{font:700 34px/1 ui-monospace,Consolas,monospace;letter-spacing:.12em;color:var(--acc)}.ok{color:var(--ok)}.small{color:var(--dim);font-size:14px}
 .item{padding:12px 0;border-top:1px solid var(--line)}.item:first-child{border-top:0;padding-top:0}.msg{color:var(--bad);margin:0 0 16px}
 </style></head><body><main>
-<h1>Earthrise Link</h1><p class="lead">Keeps your Spotify login on this laptop so the TV app does not need its own. Leave this running while you use the TV.</p>
+<h1>Earthrise Link</h1><p class="lead">Log in to Spotify here once, then allow your TV. The TV takes over the login and keeps it, so after that you can close this window for good.</p>
 <p class="msg" id="msg" hidden></p>
 <section><h2>Spotify</h2><div class="row" id="sp"></div></section>
 <section><h2>TVs asking to connect</h2><div id="pending"></div></section>
@@ -335,13 +350,14 @@ button.primary,a.btn.primary{background:var(--acc);color:#04121f}button:focus-vi
 </main><script>
 var $=function(i){return document.getElementById(i)};
 var m=new URLSearchParams(location.search).get('msg');if(m){$('msg').textContent=m;$('msg').hidden=false;history.replaceState(null,'','/link')}
-function post(path,body){return fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-Earthrise':'1'},body:JSON.stringify(body||{})}).then(load)}
+function post(path,body){return fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-Earthrise':'1'},body:JSON.stringify(body||{})}).then(function(r){if(!r.ok)return r.json().then(function(j){$('msg').textContent=j.error||'That did not work.';$('msg').hidden=false})}).then(load)}
 function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e}
 function btn(text,cls,fn){var b=el('button',cls,text);b.type='button';b.onclick=fn;return b}
 function ago(t){if(!t)return 'not used yet';var s=Math.round((Date.now()-t)/60000);return s<1?'used just now':s<60?'used '+s+' min ago':'used '+new Date(t).toLocaleString([],{dateStyle:'medium',timeStyle:'short'})}
 function load(){return fetch('/link/state',{cache:'no-store'}).then(function(r){return r.json()}).then(function(s){
 var sp=$('sp');sp.innerHTML='';
 if(s.spotify){sp.appendChild(el('span','grow ok','Logged in'+(s.spotify.user?' as '+s.spotify.user:'')+'.'));sp.appendChild(btn('Log out','',function(){post('/link/logout')}))}
+else if(s.handedTo){sp.appendChild(el('span','grow ok','Login handed to '+s.handedTo.name+'. You can close this window; the TV no longer needs the laptop.'));var a2=el('a','btn','Log in again');a2.href='/link/login';sp.appendChild(a2)}
 else{sp.appendChild(el('span','grow','Not logged in yet.'));var a=el('a','btn primary','Log in with Spotify');a.href='/link/login';sp.appendChild(a)}
 var pe=$('pending');pe.innerHTML='';
 if(!s.pending.length)pe.appendChild(el('p','small','None right now. On the TV, open Earthrise and choose Connect to laptop.'));
@@ -351,7 +367,7 @@ var de=$('devices');de.innerHTML='';
 if(!s.devices.length)de.appendChild(el('p','small','No TVs paired yet.'));
 s.devices.forEach(function(d){var it=el('div','item row');var t=el('div','grow');t.appendChild(el('div','',d.name));t.appendChild(el('div','small',ago(d.lastSeen)));it.appendChild(t);
 it.appendChild(btn('Remove','',function(){post('/link/forget',{id:d.id})}));de.appendChild(it)});
-$('addr').textContent='This laptop: '+s.name+(s.addresses.length?' at '+s.addresses.map(function(a){return a+':'+s.port}).join(', '):'')+'. The TV finds it by itself on the same Wi-Fi; type this address on the TV only if it does not.';
+$('addr').textContent='Pairing needs this window open only until the TV says it is connected. This laptop: '+s.name+(s.addresses.length?' at '+s.addresses.map(function(a){return a+':'+s.port}).join(', '):'')+'. The TV finds it by itself on the same Wi-Fi; type this address on the TV only if it does not.';
 }).catch(function(){$('msg').textContent='Earthrise Link stopped. Start it again with start.cmd.';$('msg').hidden=false})}
 load();setInterval(load,2000);
 </script></body></html>`;
