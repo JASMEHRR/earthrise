@@ -150,6 +150,40 @@ public class MainActivity extends Activity {
             new Thread(() -> answer(id, LinkClient.call(method, base, path, body, secret)), "link-call").start();
         }
 
+        /**
+         * Starts the stick's Spotify app (the phone-style one, which keeps playing behind other apps)
+         * so it shows up as a Spotify device; the page then plays on it and calls backFromSpotify.
+         * Comes back by itself after 20 s regardless. False when Spotify is not installed.
+         */
+        @JavascriptInterface
+        public boolean wakeSpotify() {
+            android.content.Intent i = getPackageManager().getLaunchIntentForPackage(SPOTIFY);
+            if (i == null) return false;
+            final android.content.Intent go = i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                    | android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION);
+            main.post(() -> {
+                try {
+                    startActivity(go);
+                } catch (RuntimeException e) {
+                    Log.w(TAG, "could not open Spotify: " + e);
+                    return;
+                }
+                waking = true;
+                main.postDelayed(bringBack, 20000);
+            });
+            return true;
+        }
+
+        /** The song is sent: come back on top of Spotify (it keeps playing behind Earthrise). */
+        @JavascriptInterface
+        public void backFromSpotify() {
+            main.post(() -> {
+                if (!waking) return;
+                main.removeCallbacks(bringBack);
+                main.postDelayed(bringBack, 1500);
+            });
+        }
+
         @JavascriptInterface
         public void setLiveAudio(final boolean on) {
             main.post(() -> {
@@ -162,6 +196,29 @@ public class MainActivity extends Activity {
             });
         }
     }
+
+    private static final String SPOTIFY = "com.spotify.music";
+    /** Spotify was opened by wakeSpotify and Earthrise should come back on top of it. */
+    private boolean waking;
+
+    private final Runnable bringBack = () -> {
+        if (!waking) return;
+        waking = false;
+        startActivity(new android.content.Intent(MainActivity.this, MainActivity.class)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                        | android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                        | android.content.Intent.FLAG_ACTIVITY_NO_ANIMATION));
+    };
+
+    /** Behind Spotify, Fire OS's WebView pauses the page; it has to keep going to send the song. */
+    private final Runnable keepAwake = new Runnable() {
+        @Override
+        public void run() {
+            if (!waking || web == null) return;
+            web.resumeTimers();
+            main.postDelayed(this, 1000);
+        }
+    };
 
     private void answer(String id, String json) {
         final String code = "window.onLinkResult&&onLinkResult(" + org.json.JSONObject.quote(id == null ? "" : id) + "," + json + ")";
@@ -305,6 +362,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        waking = false;
+        main.removeCallbacks(bringBack);
+        main.removeCallbacks(keepAwake);
         hideSystemUi();
         if (web != null) web.onResume();
         if (wantAudio) startAudio();
@@ -313,7 +373,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         stopAudio();
-        if (web != null) web.onPause();
+        if (web != null) {
+            web.onPause();
+            web.resumeTimers(); // Fire OS's WebView would stop the page here (see keepAwake)
+        }
+        main.post(keepAwake);
         super.onPause();
     }
 

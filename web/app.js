@@ -533,10 +533,34 @@ function control(action) {
 function togglePlay() { return control(np.playing ? 'pause' : 'play'); }
 
 /* Plays a track list or a playlist. Falls back to the first available device when none is active. */
+/* On the TV, songs picked here (or asked for through Jarvis) play on this TV's own Spotify: the
+   phone-style Spotify app on the stick, which keeps playing behind Earthrise. (Fire TV's Spotify TV
+   app pauses whenever it is covered, so it is not used.) When that Spotify is not running it is not
+   a device yet: Earthrise opens it in the background for a few seconds and comes back. */
+var TV_NAME = /fire ?tv|aft[a-z]{2}/i;
+function listDevices() { return apiJson('/me/player/devices').then(function (j) { return ((j && j.devices) || []).filter(function (d) { return !d.is_restricted; }); }); }
+function tvDevice() {
+  if (!native || !native.wakeSpotify) return Promise.resolve(null);
+  var mine = function (ds) { return ds.filter(function (d) { return TV_NAME.test(d.name || ''); })[0] || null; };
+  var wait = function (n) {
+    return new Promise(function (res) { setTimeout(res, 1000); }).then(listDevices).then(function (ds) {
+      return mine(ds) || (n > 0 ? wait(n - 1) : null);
+    });
+  };
+  return listDevices().then(function (ds) {
+    var d = mine(ds);
+    if (d || !native.wakeSpotify()) return d;
+    toast('Starting Spotify on this TV...');
+    return wait(15);
+  }).catch(function () { return null; });
+}
 function startPlayback(body, label) {
   if (DEMO && !token) { toast('Demo mode: connect Spotify to play your music.'); return Promise.resolve(false); }
   if (!token) { openDrawer('connect'); return Promise.resolve(false); }
-  return api('/me/player/play', { method: 'PUT', body: body }).then(function (r) {
+  return tvDevice().then(function (tv) {
+    return api('/me/player/play' + (tv ? '?device_id=' + encodeURIComponent(tv.id) : ''), { method: 'PUT', body: body });
+  }).then(function (r) {
+    if (native && native.backFromSpotify) native.backFromSpotify();
     if (r.status !== 404) return checkPlayResponse(r);
     return firstDevice().then(function (dev) {
       if (!dev) { toast('Open Spotify on your phone, PC or TV first, then pick again.'); return false; }
